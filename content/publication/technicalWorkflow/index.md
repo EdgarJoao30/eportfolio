@@ -37,7 +37,7 @@ doi: "https://doi.org/10.1155/2021/3220244"
 publication_types: ["2"]
 
 # Publication name and optional abbreviated publication name.
-publication: In *Journal of Environmental and Public Health
+publication: In *Journal of Environmental and Public Health*
 publication_short: In *Journal of Environmental and Public Health*
 
 abstract: Land-use practices such as agriculture can impact mosquito vector breeding ecology, resulting in changes in disease transmission. The typical breeding habitats of Africa’s second most important malaria vector Anopheles funestus are large, semipermanent water bodies, which make them potential candidates for targeted larval source management. This is a technical workflow for the integration of drone surveys and mosquito larval sampling, designed for a case study aiming to characterise An. funestus breeding sites near two villages in an agricultural setting in Côte d’Ivoire. Using satellite remote sensing data, we developed an environmentally and spatially representative sampling frame and conducted paired mosquito larvae and drone mapping surveys from June to August 2021. To categorise the drone imagery, we also developed a land cover classification scheme with classes relative to An. funestus breeding ecology. We sampled 189 potential breeding habitats, of which 119 (63%) were positive for the Anopheles genus and nine (4.8%) were positive for An. funestus. We mapped 30.42 km2 of the region of interest including all water bodies which were sampled for larvae. These data can be used to inform targeted vector control efforts, although its generalisability over a large region is limited by the fine-scale nature of this study area. This paper develops protocols for integrating drone surveys and statistically rigorous entomological sampling, which can be adjusted to collect data on vector breeding habitats in other ecological contexts. Further research using data collected in this study can enable the development of deep-learning algorithms for identifying An. funestus breeding habitats across rural agricultural landscapes in Côte d’Ivoire and the analysis of risk factors for these sites.
@@ -86,13 +86,3 @@ image:
 #   Otherwise, set `slides: ""`.
 slides: ""
 ---
-
-{{% callout note %}}
-Click the *Cite* button above to demo the feature to enable visitors to import publication metadata into their reference management software.
-{{% /callout %}}
-
-{{% callout note %}}
-Create your slides in Markdown - click the *Slides* button to check out the example.
-{{% /callout %}}
-
-Supplementary notes can be added here, including [code, math, and images](https://wowchemy.com/docs/writing-markdown-latex/).
