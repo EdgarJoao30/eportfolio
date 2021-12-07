@@ -6,7 +6,7 @@ title: Edgar Manrique
 superuser: true
 
 # Role/position/tagline
-role: MSc Student in Erasmus Mundus Copernicus Master in Digital Earth
+role: MSc Student in Geoinformatics and Data Science
 
 # Organizations/Affiliations to show in About widget
 organizations:

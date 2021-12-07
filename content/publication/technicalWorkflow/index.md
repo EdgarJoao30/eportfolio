@@ -1,5 +1,5 @@
 ---
-title: "Technical Workflow Development for Integrating Drone Surveys and Entomological Sampling to Characterise Aquatic Larval Habitats of Anopheles funestus in Agricultural Landscapes in Coˆte d’Ivoire"
+title: "Technical Workflow Development for Integrating Drone Surveys and Entomological Sampling to Characterise Aquatic Larval Habitats of Anopheles funestus in Agricultural Landscapes in Côte d’Ivoire"
 
 # Authors
 # If you created a profile for a user (e.g. the default `admin` user), write the username (folder name) here
