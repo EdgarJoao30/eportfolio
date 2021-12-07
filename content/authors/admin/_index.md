@@ -6,7 +6,7 @@ title: Edgar Manrique
 superuser: true
 
 # Role/position/tagline
-role: MSc Student in Geoinformatics and Data Science
+role: MSc Student in Erasmus Mundus Copernicus Master in Digital Earth
 
 # Organizations/Affiliations to show in About widget
 organizations:
@@ -25,7 +25,7 @@ interests:
 # Education to show in About widget
 education:
   courses:
-  - course: MSc(c) Geoinformatics and Data Science
+  - course: MSc Erasmus Mundus Copernicus Master in Digital Earth
     institution: Paris Lodron Universität Salzburg, Université Bretagne Sud
     year: 2021-2023
   - course: BSc in Environmental Engineering
@@ -54,7 +54,7 @@ social:
   link: https://www.linkedin.com/in/edgar-joao-manrique-valverde-446b0a114/
 
 # Link to a PDF of your resume/CV.
-# To use: copy your resume to `static/uploads/resume.pdf`, enable `ai` icons in `params.toml`, 
+# To use: copy your resume to `static/uploads/resume.pdf`, enable `ai` icons in `params.toml`,
 # and uncomment the lines below.
 # - icon: cv
 #   icon_pack: ai
