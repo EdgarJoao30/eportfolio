@@ -1,0 +1,4638 @@
+---
+title: "<center><div class='mytitle'>Dengue cases time series forecasting in the peruvian amazon</div></center>"
+subtitle: "<center><div class='mysubtitle'>See the code on [github](https://github.com/EdgarJoao30). This analysis is part of my thesis project for Environmental Engineering.</div></center>"
+
+Project: 
+author:
+- name: Edgar Joao Manrique Valverde
+  affiliation: Universidad Peruana Cayetano Heredia / Universidad Nacional Federico Villarreal
+Comment:
+web: 
+date: June 30 2019
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 1
+    number_sections: true
+    code_folding: hide
+    df_print: paged
+    css: style.css
+    includes:
+      after_body: footer.html
+      in_header: header.html
+---
+
+*Any problem with this code please contact: edgar.manrique30@gmail.com/edgar.manrique@upch.pe*
+<br><br>
+
+```{r libraries, include=FALSE, message = FALSE, warning = FALSE}
+library('ggplot2'); library('forecast'); library('tseries'); library('stringr'); library('dplyr'); library('maptools'); library("cowplot"); library("lubridate"); library("DT"); library("reshape2"); library(maptools);library(rgeos);library(Cairo);library(ggmap);library(scales);library(RColorBrewer); library(raster); library(Hmisc); library(readxl); library(leaflet); library(mapproj); library(ggmap); library(tidyr); library(ggpubr)
+```
+
+```{r data management, include = FALSE}
+#load the database
+rm(list = ls())
+setwd("C:/Users/edgar/Google Drive/tesis/data/")
+dt <- read.csv('db_clima_tesis_v4.csv', stringsAsFactors = F)
+dt[dt$province == 'Datem del maraon',]$province <- 'Datem del marañon' #encoding issue
+#summarise by province
+dt<-dt %>% group_by(province,yy,mm) %>% 
+           summarise(den=sum(Den),pop=sum(pop2007), 
+                     meanTemperature = mean(meanTemperature), 
+                     maxTemperature = mean(maxTemperature),
+                     minTemperature = mean(minTemperature),
+                     precipitation = mean(precipitation.chirps),
+                     NDVI = mean(NDVI),
+                     NDWI = mean(NDWI),
+                     EVI = mean(EVI),
+                     ET = mean(ET),
+                     evp = mean(evp),
+                     LST = mean(LST),
+                     runoff = mean(runoff),
+                     swvl1 = mean(swvl1))
+#convert to date format
+dt$mm <- str_pad(dt$mm, 2, pad = '0')
+dt$date <- paste0(dt$yy, '-', dt$mm, '-01')
+dt$ts.date <- as.Date(dt$date)
+dt$den1k <- dt$den*1000/dt$pop
+
+df <- read.csv('db_clima_tesis_v4.csv', stringsAsFactors = F)
+#summarise by all loreto
+df<-df %>% group_by(yy,mm) %>%
+  summarise(den=sum(Den),pop=sum(pop2007), 
+                     meanTemp = mean(meanTemperature), 
+                     maxTemp = mean(maxTemperature),
+                     minTemp = mean(minTemperature),
+                     precipitation = mean(precipitation.chirps),
+                     NDVI = mean(NDVI),
+                     NDWI = mean(NDWI),
+                     EVI = mean(EVI),
+                     ET = mean(ET),
+                     evp = mean(evp),
+                     LST = mean(LST),
+                     runoff = mean(runoff),
+                     swvl1 = mean(swvl1))
+#convert to date format
+df$mm <- str_pad(df$mm, 2, pad = '0')
+df$date <- paste0(df$yy, '-', df$mm, '-01')
+df$ts.date <- as.Date(df$date)
+df$den1k <- df$den*1000/df$pop
+
+df2 <- df[,c(1:2, 5:16, 19)]
+df.long <- melt(df2, id.vars = c("yy", "mm"))
+# map
+area <- shapefile("C:/Users/edgar/Google Drive/tesis/dist_loreto/provinces_4326.shp")
+area@data[area@data$NOMBPROV == "DATEM DEL MARAï¿½ON",]$NOMBPROV <- "DATEM DEL MARAÑON"
+area@data$NOMBPROV <- capitalize(tolower(area@data$NOMBPROV))
+area.points <- fortify(area, region = "NOMBPROV")
+colnames(area.points)[6]<-"NOMBPROV"
+#excel
+data_sources <- read_excel("../data/clima_sources_v2.xlsx")
+
+#adding cases to map
+df3 <- dt %>% group_by(province) %>% 
+           summarise(den=sum(den),
+                     pop=max(pop), 
+                     meanTemperature = mean(meanTemperature), 
+                     maxTemperature = mean(maxTemperature),
+                     minTemperature = mean(minTemperature),
+                     precipitation = mean(precipitation),
+                     NDVI = mean(NDVI),
+                     NDWI = mean(NDWI),
+                     EVI = mean(EVI),
+                     ET = mean(ET),
+                     evp = mean(evp),
+                     LST = mean(LST),
+                     runoff = mean(runoff),
+                     swvl1 = mean(swvl1))
+df3$den1k <- df3$den*1000/df3$pop
+
+area@data$den1k <- df3$den1k
+area@data$population <- df3$pop
+area@data$den <- df3$den
+
+df4 <- dt %>% group_by(province) %>% 
+           summarise(NDWI = sd(NDWI)/sqrt(132),
+                     EVI = sd(EVI)/sqrt(132),
+                     LST = sd(LST)/sqrt(132),
+                     runoff = sd(runoff)/sqrt(132))
+
+
+dt2 <- ungroup(dt)
+dt2$grupo <- NA
+dt2[dt2$province %in% c('Alto amazonas', 'Maynas', 'Datem del marañon', 'Loreto'),]$grupo <- 'Alta'
+dt2[dt2$province %in% c('Mariscal ramon castilla', 'Requena', 'Ucayali'),]$grupo <- 'Baja'
+dt2 <- dt2 %>% dplyr::select(grupo, yy, EVI, LST, runoff, NDWI) %>% rename(Escorrentia = runoff)
+
+dt2 <- gather(dt2, "parametro", "valor", -c(grupo, yy))
+
+
+dt3 <- ungroup(dt)
+dt3$grupo <- NA
+dt3[dt3$province %in% c('Alto amazonas', 'Maynas', 'Datem del marañon', 'Loreto'),]$grupo <- 'Alta'
+dt3[dt3$province %in% c('Mariscal ramon castilla', 'Requena', 'Ucayali'),]$grupo <- 'Baja'
+dt3 <- dt3 %>% dplyr::select(grupo, mm, EVI, LST, runoff, NDWI) %>% rename(Escorrentia = runoff)
+
+dt3 <- gather(dt3, "parametro", "valor", -c(grupo, mm))
+###
+
+dt.year <- dt %>% group_by(province, yy) %>% 
+  summarise(den1k = sum(den1k),
+            EVI = mean(EVI),
+            LST = mean(LST),
+            Escorrentia = mean(runoff),
+            NDWI = mean(NDWI))
+dt.year$initial <- NA
+dt.year[dt.year$province == "Alto amazonas",]$initial <- "AM"
+dt.year[dt.year$province == "Datem del marañon",]$initial <- "DM"
+dt.year[dt.year$province == "Loreto",]$initial <- "LO"
+dt.year[dt.year$province == "Mariscal ramon castilla",]$initial <- "RC"
+dt.year[dt.year$province == "Requena",]$initial <- "RQ"
+dt.year[dt.year$province == "Ucayali",]$initial <- "UY"
+dt.year[dt.year$province == "Maynas",]$initial <- "MY"
+
+dt.year.long <- gather(dt.year, key = "parameter", value = "value", -c(province, yy))
+
+area2 <- area.points
+
+centroids <- gCentroid(area, byid = T)
+coords <- coordinates(centroids)
+data <- area@data
+CRS <- CRS("+init=epsg:4326")
+
+centroids <- data 
+centroids <- cbind(centroids, coords)
+```
+
+```{r custom made functions, warning=F}
+df.gen <- function(maes, dim){
+  df.matrix <- matrix(NA, dim, 12)
+  
+  for (i in 1:dim) {
+    df.matrix[i, 1]<- colMeans(maes[[i]],na.rm=TRUE)[1];
+    df.matrix[i, 2]<- colMeans(maes[[i]],na.rm=TRUE)[2];
+    df.matrix[i, 3]<- colMeans(maes[[i]],na.rm=TRUE)[3];
+    df.matrix[i, 4]<- colMeans(maes[[i]],na.rm=TRUE)[4];
+    df.matrix[i, 5]<- colMeans(maes[[i]],na.rm=TRUE)[5];
+    df.matrix[i, 6]<- colMeans(maes[[i]],na.rm=TRUE)[6];
+    df.matrix[i, 7]<- colMeans(maes[[i]],na.rm=TRUE)[7];
+    df.matrix[i, 8]<- colMeans(maes[[i]],na.rm=TRUE)[8];
+    df.matrix[i, 9]<- colMeans(maes[[i]],na.rm=TRUE)[9];
+    df.matrix[i, 10]<- colMeans(maes[[i]],na.rm=TRUE)[10];
+    df.matrix[i, 11]<- colMeans(maes[[i]],na.rm=TRUE)[11];
+    df.matrix[i, 12]<- colMeans(maes[[i]],na.rm=TRUE)[12]
+  }
+  
+  df.mae <- data.frame(variable = 1:dim)
+df.mae$mean <- NA; df.mae$max <- NA; df.mae$min <- NA
+
+for (i in 1:dim) {
+  df.mae$mean[df.mae$variable==i] <- mean(colMeans(maes[[i]],na.rm=TRUE)) 
+  df.mae$max[df.mae$variable==i] <- max(colMeans(maes[[i]],na.rm=TRUE)) 
+  df.mae$min[df.mae$variable==i] <- min(colMeans(maes[[i]],na.rm=TRUE))
+}
+  dfs <- list(df.matrix, df.mae)
+  return(dfs)
+
+}
+
+arima.xreg.12step.lagvars<-function(ts.cases, xreglags, p, d, q, P, D, Q){
+  k <- 132-36 # minimum data length for fitting a model
+  n <- length(ts.cases)
+  st <- tsp(ts.cases)[1]+(k-2)/12
+  
+  mae1<-mae2<-mae3<-mae4<-mae5<-mae6<-mae7<- matrix(NA,n-k,12)
+  maes <- list(mae1, mae2, mae3, mae4, mae5, mae6, mae7)
+  for(i in 1:(n-k)){
+  tryCatch({
+  xshort <- window(ts.cases, start=st+(i-k+1)/12, end=st+i/12)
+  regshort <- window(xreglags, start=st+(i-k+1)/12, end=st+i/12)
+  
+  xnext <- window(ts.cases, start=st + (i+1)/12, end=st + (i+12)/12)
+  regnext <- window(xreglags, start=st + (i+1)/12, end=st + (i+12)/12)
+  
+  fit1 <- Arima(xshort, order=c(p,d,q), seasonal=list(order=c(P,D,Q), period = 12))
+  fcast1 <- forecast(fit1, h=12)
+  mae1[i,1:length(xnext)] <- abs(fcast1[['mean']]-xnext)
+  
+  for (a in 1:dim(xreglags)[2]) {
+    maes[[a+1]][i, 1:length(xnext)]<-
+      abs(
+      forecast(
+      Arima(xshort, order=c(p,d,q), seasonal=list(order=c(P,D,Q), period = 12), xreg = regshort[,1:a])
+      , h = 12, xreg = regnext[,1:a])[["mean"]]-xnext)
+  }
+  }, error = function(e){})
+  }
+  
+  maes[[1]] <- mae1
+  df.matrix <- df.gen(maes, dim(xreglags)[2]+1)
+  return(df.matrix)
+  }
+
+arima.xreg.12step.separateLags<-function(ts.cases, xreglags, p, d, q, P, D, Q){
+  k <- 132-36 # minimum data length for fitting a model
+  n <- length(ts.cases)
+  st <- tsp(ts.cases)[1]+(k-2)/12
+  
+  mae1<-mae2<-mae3<-mae4<-mae5<-mae6<-mae7<- matrix(NA,n-k,12)
+  maes <- list(mae1, mae2, mae3, mae4, mae5, mae6, mae7)
+  for(i in 1:(n-k)){
+  tryCatch({
+  xshort <- window(ts.cases, start=st+(i-k+1)/12, end=st+i/12)
+  regshort <- window(xreglags, start=st+(i-k+1)/12, end=st+i/12)
+  
+  xnext <- window(ts.cases, start=st + (i+1)/12, end=st + (i+12)/12)
+  regnext <- window(xreglags, start=st + (i+1)/12, end=st + (i+12)/12)
+  
+  fit1 <- Arima(xshort, order=c(p,d,q), seasonal=list(order=c(P,D,Q), period = 12))
+  fcast1 <- forecast(fit1, h=12)
+  mae1[i,1:length(xnext)] <- abs(fcast1[['mean']]-xnext)
+  
+  for (a in 1:dim(xreglags)[2]) {
+    maes[[a+1]][i, 1:length(xnext)]<-
+      abs(
+      forecast(
+      Arima(xshort, order=c(p,d,q), seasonal=list(order=c(P,D,Q), period = 12), xreg = regshort[,a:a])
+      , h = 12, xreg = regnext[,a:a])[["mean"]]-xnext)
+  }
+  }, error = function(e){})
+  }
+  
+  maes[[1]] <- mae1
+  df.matrix <- df.gen(maes, dim(xreglags)[2]+1)
+  return(df.matrix)
+  }
+
+arima.xreg.12step<-function(main.ts, variables, p, d, q, P, D, Q){
+k <- 132-36 # minimum data length for fitting a model
+n <- length(main.ts[,1])
+mae1<-mae2<-mae3<-mae4<-mae5<-mae6<-mae7<-mae8<- mae9<- mae10<-mae11<-mae12<-mae13<- matrix(NA,n-k,12)
+maes <- list(mae1, mae2, mae3, mae4, mae5, mae6, mae7, mae8, mae9, mae10, mae11, mae12, mae13)
+st <- tsp(main.ts[,1])[1]+(k-2)/12
+ts.list <- list()
+
+for (i in 1:length(variables)) {
+  ts.list[[i]]<-ts(dplyr::select(as.data.frame(main.ts),contains(variables[i])), start = 2003, frequency = 12)
+  
+} 
+xshort.list <- list()
+xnext.list <- list()
+for(i in 1:(n-k)){
+  xshort <- window(main.ts[,1], start=st+(i-k+1)/12, end=st+i/12)
+  xnext <- window(main.ts[,1], start=st + (i+1)/12, end=st + (i+12)/12)
+  for (variable in 1:length(variables)) {
+    xshort.list[[variable]] <- window(ts.list[[variable]], start=st+(i-k+1)/12, end=st+i/12)
+    xnext.list[[variable]] <- window(ts.list[[variable]], start=st + (i+1)/12, end=st + (i+12)/12)
+  }
+  
+  fit1 <- Arima(xshort, order=c(p,d,q), seasonal=list(order=c(P,D,Q), period = 12))
+  fcast1 <- forecast(fit1, h=12)
+  mae1[i,1:length(xnext)] <- abs(fcast1[['mean']]-xnext)
+  
+  for (a in 1:length(variables)) {
+    maes[[a+1]][i, 1:length(xnext)]<-
+      abs(
+      forecast(
+      Arima(xshort, order=c(p,d,q), seasonal=list(order=c(P,D,Q), period = 12), xreg = xshort.list[[a]])
+      , h = 12, xreg = xnext.list[[a]])[["mean"]]-xnext)
+  }
+}
+maes[[1]] <- mae1
+df.matrix <- df.gen(maes, length(variables)+1)
+return(df.matrix)
+}
+
+arima.xreg.12step.keep<-function(main.ts, variables, keep, p, d, q, P, D, Q){
+k <- 132-36 # minimum data length for fitting a model
+n <- length(main.ts[,1])
+mae1<-mae2<-mae3<-mae4<-mae5<-mae6<-mae7<-mae8<- mae9<- mae10<-mae11<-mae12<-mae13<- matrix(NA,n-k,12)
+maes <- list(mae1, mae2, mae3, mae4, mae5, mae6, mae7, mae8, mae9, mae10, mae11, mae12, mae13)
+st <- tsp(main.ts[,1])[1]+(k-2)/12
+ts.list <- list()
+ts.keep <- NULL
+variables <- variables[!variables %in% keep]
+for (i in 1:length(variables)) {
+  ts.list[[i]]<-ts(dplyr::select(as.data.frame(main.ts),contains(variables[i])), start = 2003, frequency = 12)
+  
+}
+for (i in 1:length(keep)) {
+  ts.keep <-cbind(ts.keep, ts(dplyr::select(as.data.frame(main.ts),contains(keep[i])), start = 2003, frequency = 12)
+  )
+}
+
+xshort.list <- list()
+xnext.list <- list()
+
+
+
+for(i in 1:(n-k)){
+  xshort <- window(main.ts[,1], start=st+(i-k+1)/12, end=st+i/12)
+  xnext <- window(main.ts[,1], start=st + (i+1)/12, end=st + (i+12)/12)
+  
+  xshortkeep <- window(ts.keep, start=st+(i-k+1)/12, end=st+i/12)
+  xnextkeep <- window(ts.keep, start=st + (i+1)/12, end=st + (i+12)/12)
+  
+  for (variable in 1:length(variables)) {
+    xshort.list[[variable]] <- cbind(xshortkeep, window(ts.list[[variable]], start=st+(i-k+1)/12, end=st+i/12))
+    xnext.list[[variable]] <- cbind(xnextkeep, window(ts.list[[variable]], start=st + (i+1)/12, end=st + (i+12)/12))
+  }
+  
+  
+  fit1 <- Arima(xshort, order=c(p,d,q), seasonal=list(order=c(P,D,Q), period = 12))
+  fcast1 <- forecast(fit1, h=12)
+  mae1[i,1:length(xnext)] <- abs(fcast1[['mean']]-xnext)
+  
+  for (a in 1:length(variables)) {
+    maes[[a+1]][i, 1:length(xnext)]<-
+      abs(
+      forecast(
+      Arima(xshort, order=c(p,d,q), seasonal=list(order=c(P,D,Q), period = 12), xreg = xshort.list[[a]])
+      , h = 12, xreg = xnext.list[[a]])[["mean"]]-xnext)
+  }
+}
+maes[[1]] <- mae1
+df.matrix <- df.gen(maes, length(variables)+1)
+return(df.matrix)
+}
+```
+
+# Initial exploration
+
+The study area includes the 7 provinces of the department of Loreto located in the Peruvian Amazon. The study population includes the inhabitants of the department of Loreto, which, according to the 2007 census of the National Institute of Statistics and Informatics (INEI), is 891 732 inhabitants, with Iquitos and San Juan Bautista being the most populated districts with 159 023 and 102 076 inhabitants respectively, and Tapiche and Soplin the least populated districts with 1042 and 613 inhabitants respectively. The main economic activities in Loreto are agriculture, livestock, hunting and forestry, followed by trade and repair of vehicles.
+
+In the Peruvian Amazon, the report of the first outbreak occurred in Iquitos and Tarapoto in 1990. In Loreto, which is the department with the most cases of dengue in Peru, the number of cases of the disease has been increasing, the entry of genotype DENV-2 in 2010 produced an epidemic that had a great impact on health services. In this way, in 2011, 21 245 cases were presented in Loreto. During summer a greater number of cases occur, probably because it is rainy season and high temperatures. According to the last report of the general direction of epidemiology, 1187 cases of dengue were registered in the department of Loreto in 2017. Cases are found in 19 departments of Peru, with the departments of the north coast and the Amazon region being the most affected.
+
+```{r interactive map with cases, fig.align = "center"}
+bins <- c(0, 10, 20, 50, 100, Inf)
+pal <- colorBin("YlOrRd", domain = area$den1k, bins = bins)
+
+labels <- sprintf(
+  "<strong>%s</strong><br/>%g cases x 1000 inhabitants on 11 years<br/>%d total inhabitants<br/>%f total cases",
+  area$NOMBPROV, area$den1k, area$population, area$den ) %>% lapply(htmltools::HTML)
+
+leaflet(area) %>%
+  setView(-74, -5, 6) %>%
+  addProviderTiles(providers$Esri.WorldStreetMap) %>% 
+  addPolygons(
+    fillColor = ~pal(den1k),
+    weight = 2,
+    opacity = 1,
+    color = "white",
+    dashArray = "3",
+    fillOpacity = 0.7,
+    highlight = highlightOptions(
+      weight = 5,
+      color = "#666",
+      dashArray = "",
+      fillOpacity = 0.7,
+      bringToFront = TRUE),
+    label = labels,
+    labelOptions = labelOptions(
+      style = list("font-weight" = "normal", padding = "3px 8px"),
+      textsize = "15px",
+      direction = "auto")) %>%
+  addLegend(pal = pal, values = ~den1k, opacity = 0.7, title = NULL,
+    position = "bottomright")
+
+```
+
+Incidence was calculated based on the population of the province in the year 2007 using the data from the National Institute of Statistics and Informatics (INEI).
+
+## Time series plots
+
+The time series plots shows the profile of the time series of the Monthly Accumulated Incidence (cases per 1000 inhabitants) for each province of the department of Loreto, compared with the accumulated time series of the entire department. The province that contributes the largest number of cases of dengue in Loreto is the province of Maynas with 46976 cases (88.5% of cases in the department of Loreto) during the 11 years of temporal scope of this study, followed by Alto Amazonas with 3978 cases (7.5% of cases in the department of Loreto).
+A great outbreak of the disease can be observed in the year 2011, being the highest peak in the month of January of this year. The province of Maynas during that date continues being the one that contributed most to the number of cases of the entire department with 8400 cases (93.4% of cases in the department of Loreto) of the disease, followed by Alto Amazonas with 395 cases (4.3% of cases in the department of Loreto).
+
+
+```{r cases time series plot, fig.width=15, fig.height=10, fig.align = "center"}
+(g <- ggplot() +
+    geom_line(data = dt, aes(ts.date, den1k, colour="Provincia"), size=0.7) +
+    geom_line(data = df, aes(ts.date, den1k, colour="Departamento"), size=0.7) +
+    labs(y="Incidencia del dengue\n(casos por 1000 habitantes)", x = '', color=NULL) +
+    theme_bw() +
+    theme(panel.grid = element_blank(),
+          axis.text.x = element_text(angle = 0, vjust=0.5, size = 8),
+          axis.text.y = element_text(angle = 0, vjust=0.5, size = 8),
+          axis.title= element_text(size=15,face="bold"),
+          title = element_text(angle = 0, vjust=0.5, size = 15, face = 'bold')) + 
+  facet_wrap(.~province, scales = "free_y")+
+  scale_colour_manual(name="",
+    values=c(Provincia="red", Departamento="gray3"))+
+  theme_minimal()+
+  theme(legend.position = "bottom",
+        legend.box.background = element_rect(),
+        legend.text = element_text(size = 15),
+        title = element_text(face = "bold", size = 20),
+        axis.text = element_text(size = 15),
+        strip.text = element_text(face ="bold", size = 20)
+          
+        ))
+ggsave(plot = g, filename = 'plots/ALL_timeseries.png')
+```
+
+## Boxplots
+
+The seasonality in the time series was explored in a preliminary way by means of a box graph. In the graph it can be seen that the number of cases of dengue begins to increase in the month of November and usually extends until March of the following year.
+
+```{r cases boxplots, warning=F, fig.width=15, fig.height=10, fig.align = "center" }
+lbls<- c("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+temp <- ggplot(dt, aes(as.factor(mm), den1k))
+(temp <- temp + geom_boxplot(col="darkorange4", fill="burlywood4") +
+    scale_x_discrete(labels = lbls) +
+    labs(y="Dengue incidence\n(cases per 1000 inhabitants)", x='', color=NULL) +
+    theme_bw() +
+    theme(panel.grid = element_blank(),
+          axis.text.x = element_text(angle = 0, vjust=0.5, size = 8),
+          axis.text.y = element_text(angle = 0, vjust=0.5, size = 8),
+          axis.title=element_text(size=15,face="bold"),
+          title = element_text(angle = 0, vjust=0.5, size = 15, face = 'bold')) + facet_wrap(.~province, scales = "free_y"))
+```
+
+# ACF & PACF - Stationarity test
+
+Now we will construct the Autocorrelation and partial autocorrelation plots for the time series cases of the seven provinces, thus, we will have an insight of how the data is behaving and what orders of Moving average (MA) or Auto Regression (AR) are the best to describe them in our ARIMA models. Plots 95% confidence intervals are represented as dotted lines. A seasonal component is observed in all ACF plots with a frequency of 12 lags (meaning 12 months) as was also observed in the boxplots in the previous section. The augmented Dickey-Fuller test was used to test starionarity and evaluate if the data needs differencing. Datem del Marañon and Mariscal Ramon Castilla had a p-value >0.02 suggesting non-stationarity.
+
+Based on the observation on the ACF and PACF plots and stationarity we will explore the following ARIMA models for the provinces:
+
+- Alto Amazonas ARIMA(2,0,2)(0,1,0)
+- Datem del Marañon ARIMA(2,1,3)(0,1,0)
+- Loreto ARMA(2,0,2)(0,1,0)
+- Mariscal Ramon Castilla ARIMA(0,1,1)(0,1,0)
+- Maynas ARIMA(3,0,2)(0,1,0)
+- Requena ARIMA(2,0,1)(0,1,0)
+- Ucayali ARIMA(2,0,1)(0,1,0)
+
+```{r cases ACF & PACF, warning=F, message=F, fig.align = "center"}
+df <- data.frame(province = unique(dt$province), #template data frame to store values 
+                 adf.pvalue = rep(0, 7))
+
+for (i in unique(dt$province)) { # iterate between provinces
+  count.ts = ts(dt[dt$province == i, c('den1k')]) # TS
+  adf.pvalue <- adf.test(count.ts, alternative = 'stationary') # test for stationarity, alt hipothesys - stationary
+  df[df$province == i, 'adf.pvalue'] <- adf.pvalue$p.value # store p-value
+  # acf and pacf plots
+  temp.bacf <- acf(count.ts, lag.max = 80, plot = FALSE) # acf
+  temp.bacfdf <- with(temp.bacf, data.frame(lag, acf)) # get df from acf to plot it with ggplot
+  temp.bpacf <- pacf(count.ts, lag.max = 80, plot = FALSE) # pacf
+  temp.bpacfdf <- with(temp.bpacf, data.frame(lag, acf)) # get df from pacf to plot it with ggplot
+  conf.level <- 0.95 # confidence level
+  ciline <- qnorm((1 - conf.level)/2)/sqrt(length(count.ts)) # confidence lines
+  #acf
+  q <- ggplot(data = temp.bacfdf, mapping = aes(x = lag, y = acf)) +
+      geom_hline(aes(yintercept = 0)) +
+      geom_segment(mapping = aes(xend = lag, yend = 0))+
+      geom_hline(aes(yintercept = ciline), linetype = 3, color = 'darkblue') + 
+      geom_hline(aes(yintercept = -ciline), linetype = 3, color = 'darkblue')+
+      labs(title = i)+
+      theme_bw() +
+      theme(panel.grid = element_blank(),
+            axis.text.x = element_text(angle = 0, vjust=0.5, size = 8),
+            axis.text.y = element_text(angle = 0, vjust=0.5, size = 8),
+            axis.title= element_text(size=8,face="bold"),
+            title = element_text(angle = 0, vjust=0.5, size = 8, face = 'bold'))
+  #pacf
+  k <- ggplot(data = temp.bpacfdf, mapping = aes(x = lag, y = acf)) +
+    geom_hline(aes(yintercept = 0)) +
+    geom_segment(mapping = aes(xend = lag, yend = 0))+
+    geom_hline(aes(yintercept = ciline), linetype = 3, color = 'darkblue') + 
+    geom_hline(aes(yintercept = -ciline), linetype = 3, color = 'darkblue')+
+    labs(title = i, y= 'Partial ACF')+
+    theme_bw() +
+      theme(panel.grid = element_blank(),
+            axis.text.x = element_text(angle = 0, vjust=0.5, size = 8),
+            axis.text.y = element_text(angle = 0, vjust=0.5, size = 8),
+            axis.title= element_text(size=8,face="bold"),
+            title = element_text(angle = 0, vjust=0.5, size = 8, face = 'bold'))+
+    scale_y_continuous(limits = c(-0.45, 0.65))
+  #
+  assign(paste0('acf.', i), q)
+  assign(paste0('partial.cor.', i), k)
+}
+autocorrelation.plots <- mget(c('acf.Alto amazonas', 'acf.Datem del marañon', 'acf.Loreto', 'acf.Mariscal ramon castilla','acf.Maynas', 'acf.Requena', 'acf.Ucayali'))
+
+(acf.plot <- do.call(plot_grid, autocorrelation.plots))
+
+partialautocorrelation.plots <- mget(c('partial.cor.Alto amazonas', 'partial.cor.Datem del marañon', 
+                                       'partial.cor.Loreto', 'partial.cor.Mariscal ramon castilla',
+                                       'partial.cor.Maynas', 'partial.cor.Requena', 'partial.cor.Ucayali'))
+
+(pacf.plot <- do.call(plot_grid, partialautocorrelation.plots))
+
+(df)
+#ggsave(filename = "plots/acf_plot.png", plot = acf.plot)
+#ggsave(filename = "plots/pacf_plot.png", plot = pacf.plot)
+```
+
+# Parameter estimation & model fitting {.tabset .tabset-pills}
+
+In this section we will fit the final ARIMA model, evaluate the model residuals, perform a 6 month forescasting to observe how it behaves and perform a time series cross validation or forecast evaluation with a rolling origin based on the R code made by [Rob J. Hyndman](https://robjhyndman.com/hyndsight/tscvexample/) were a comparison of 1-step, 2-step, ..., 12-step forecast is made using the Mean Absolute Error (MAE). In this scenario, as we are using incidence (cases per 1000 inhabitants), a value of 1 MAE means that the error is of 1 case per 1000 inhabitants.
+
+```{r, eval=F, echo=T}
+template <- expand.grid(province = unique(dt$province), #
+                        AR = 0:3, 
+                        I = 0:1,
+                        MA = 0:3,
+                        SAR = 0:1,
+                        SI = 1,
+                        SMA = 0:2) 
+template <- template[order(template$province),]
+template$mae <- NA
+
+
+for (province in unique(dt$province)) {
+  print(province)
+  count.ts = ts(dt[dt$province == province, c('den1k')], frequency = 12, start = 2003) # TS
+  temp <- template[template$province == province,]
+  
+  k <- 132-36 # minimum data length for fitting a model
+  n <- length(count.ts)
+  mae<- matrix(NA,n-k,12)
+  st <- tsp(count.ts)[1]+(k-2)/12
+  
+  for (p in 1:length(temp$province)) {
+    print(p)
+    
+      for(i in 1:(n-k)){
+        xshort <- window(count.ts, start=st+(i-k+1)/12, end=st+i/12)
+        xnext <- window(count.ts, start=st + (i+1)/12, end=st + (i+12)/12)
+        try(fit <- Arima(xshort, order = c(temp[p,]$AR, temp[p,]$I, temp[p,]$MA), 
+                     seasonal = list(order=c(temp[p,]$SAR, temp[p,]$SI, temp[p,]$SMA), period = 12)), silent = T)
+        fcast <- forecast(fit, h=12)
+        try(mae[i,1:length(xnext)] <- abs(fcast[['mean']]-xnext), silent = T)
+      }
+    temp$mae[p] <- mean(colMeans(mae,na.rm=TRUE))  
+  }
+  
+  if (province == 'Alto amazonas') {
+    temp2 = temp
+  }else{temp2 = rbind(temp2, temp)}
+}
+#write.csv(temp2, "model_orders_final2.csv")
+```
+
+## Alto Amazonas
+
+The final model for Alto Amazonas is ARIMA(0,0,1)(0,1,1). Model residuals and cross validation are shown next:
+
+```{r ARIMA AM 1, warning=F, fig.align = "center"}
+ts.AM = ts(dt[dt$province == "Alto amazonas", c('den1k')], frequency = 12, start = 2003) 
+fit.AM <- arima(ts.AM, order = c(0,0,1), seasonal = list(order=c(0,1,1), period = 12)) 
+
+data <- as.data.frame(fitted(fit.AM))
+data <-cbind(data, dt[dt$province == 'Alto amazonas', c('den1k', 'ts.date')])
+
+b <- lm(data$den1k ~ data$x - 1)
+summary(b)
+
+tsdisplay(residuals(fit.AM), main = "Residuales del modelo de la provincia de Alto Amazonas")
+```
+
+As shown in the ACF and PACF plots of the residuals, there are not significant lags, thus, residuals behave like white noise and suggest that the model is correctly specified.
+
+```{r ARIMA AM 2, warning=F, fig.align = "center"}
+hold <- window(ts(ts.AM), start=127)
+fit_no_holdout = arima(ts(ts.AM[-c(127:132)]), order = c(0,0,1), seasonal = list(order=c(0,1,1), period = 12))
+fcast_no_holdout <- forecast(fit_no_holdout,h=6)
+plot(fcast_no_holdout)
+lines(ts(ts.AM))
+```
+
+The forecast for the model was constructed with trained data (dropping the last six months) to compare the forecast with the actual values. The forecast predicts the positive trend and the slope of the test data tho it understimates the magnitude.
+
+```{r ARIMA AM 3, warning=F, fig.align = "center"}
+k <- 132-36 # minimum data length for fitting a model
+n <- length(ts.AM)
+mae<- matrix(NA,n-k,12)
+st <- tsp(ts.AM)[1]+(k-2)/12
+
+for(i in 1:(n-k)){
+  xshort <- window(ts.AM, start=st+(i-k+1)/12, end=st+i/12)
+  xnext <- window(ts.AM, start=st + (i+1)/12, end=st + (i+12)/12)
+  fit <- Arima(xshort, order=c(0,0,1), seasonal=list(order=c(0,1,1), period = 12))
+  fcast <- forecast(fit, h=12)
+  mae[i,1:length(xnext)] <- abs(fcast[['mean']]-xnext)
+}
+
+plot(1:12, colMeans(mae,na.rm=TRUE), type="l", col=2, xlab="horizonte", ylab="MAE",
+     ylim=c(0.2,0.8))
+legend("topleft",legend=c("SARIMA"),col=2,lty=1)
+```
+
+A 1-12 step forecast was made to have a better estimate of how well the model behaves. This time, the forecast period was of 12 months and this proccess was repeated 36 times. The time series was divided in train and test data sets, the length of the train test was constant but it was moving foward in time on each iteration. Mean Absolute Error (MAE) were calculated for each step and the mean values of MAE for each step are shown on the plot. The overall MAE for the 12 steps is shown in the table below.
+
+```{r ARIMA AM MAE, warning=F}
+df.mae <- data.frame(MAE = c('min', 'max', 'mean'))
+df.mae$value <- NA
+df.mae$value[df.mae$MAE=='min'] <- min(colMeans(mae,na.rm=TRUE))
+df.mae$value[df.mae$MAE=='max'] <- max(colMeans(mae,na.rm=TRUE))
+df.mae$value[df.mae$MAE=='mean'] <- mean(colMeans(mae,na.rm=TRUE))
+(df.mae)
+```
+
+## Datem del Marañon
+
+The final model for Datem del Marañon is ARIMA(0,0,2)(0,1,1). Model residuals and cross validation are shown next:
+
+```{r ARIMA DM 1, warning=F, fig.align = "center"}
+ts.DM = ts(dt[dt$province == "Datem del marañon", c('den1k')], frequency = 12, start = 2003) # TS
+fit.DM <- arima(ts.DM, order = c(0,0,2), seasonal = list(order=c(0,1,1), period = 12)) # RMSE
+
+data <- as.data.frame(fitted(fit.DM))
+data <-cbind(data, dt[dt$province == 'Datem del marañon', c('den1k', 'ts.date')])
+
+b <- lm(data$den1k ~ data$x - 1)
+summary(b)
+
+tsdisplay(residuals(fit.DM), main = "Residuales del modelo de la provincia de Datem del Marañon")
+```
+
+As shown in the ACF and PACF plots of the residuals, there are not significant lags, thus, residuals behave like white noise and suggest that the model is correctly specified.
+
+```{r ARIMA DM 2, warning=F, fig.align = "center"}
+hold <- window(ts(ts.DM), start=127)
+fit_no_holdout = arima(ts(ts.DM[-c(127:132)]), order = c(0,0,2), seasonal = list(order=c(0,1,1), period = 12))
+fcast_no_holdout <- forecast(fit_no_holdout,h=6)
+plot(fcast_no_holdout)
+lines(ts(ts.DM))
+```
+
+The forecast for the model was constructed with trained data (dropping the last six months) to compare the forecast with the actual values. The forecast predicts the positive trend of the test data tho it understimates the magnitude.
+
+```{r ARIMA DM 3, warning=F, fig.align = "center"}
+k <- 132-36 # minimum data length for fitting a model
+n <- length(ts.DM)
+mae<- matrix(NA,n-k,12)
+st <- tsp(ts.DM)[1]+(k-2)/12
+
+for(i in 1:(n-k)){
+  xshort <- window(ts.DM, start=st+(i-k+1)/12, end=st+i/12)
+  xnext <- window(ts.DM, start=st + (i+1)/12, end=st + (i+12)/12)
+  fit <- Arima(xshort, order=c(0,0,2), seasonal=list(order=c(0,1,1), period = 12))
+  fcast <- forecast(fit, h=12)
+  mae[i,1:length(xnext)] <- abs(fcast[['mean']]-xnext)
+}
+
+plot(1:12, colMeans(mae,na.rm=TRUE), type="l", col=2, xlab="horizonte", ylab="MAE",
+     ylim=c(0.2,0.35))
+legend("topleft",legend=c("sARIMA"),col=1,lty=1)
+```
+
+A 1-12 step forecast was made to have a better estimate of how well the model behaves. This time, the forecast period was of 12 months and this proccess was repeated 36 times. The time series was divided in train and test data sets, the length of the train test was constant but it was moving foward in time on each iteration. Mean Absolute Error (MAE) were calculated for each step and the mean values of MAE for each step are shown on the plot. The overall MAE for the 12 steps is shown in the table below.
+
+```{r ARIMA DM MAE, warning=F}
+df.mae <- data.frame(MAE = c('min', 'max', 'mean'))
+df.mae$value <- NA
+df.mae$value[df.mae$MAE=='min'] <- min(colMeans(mae,na.rm=TRUE))
+df.mae$value[df.mae$MAE=='max'] <- max(colMeans(mae,na.rm=TRUE))
+df.mae$value[df.mae$MAE=='mean'] <- mean(colMeans(mae,na.rm=TRUE))
+(df.mae)
+```
+
+## Loreto
+
+The final model for Loreto is ARIMA(0,0,1)(0,1,1). Model residuals and cross validation are shown next:
+
+```{r ARIMA LO 1, warning=F, fig.align = "center"}
+ts.LO = ts(dt[dt$province == "Loreto", c('den1k')], frequency = 12, start = 2003) # TS
+fit.LO <- arima(ts.LO, order = c(0,0,1), seasonal = list(order=c(0,1,1), period = 12)) # RMSE
+
+data <- as.data.frame(fitted(fit.LO))
+data <-cbind(data, dt[dt$province == 'Loreto', c('den1k', 'ts.date')])
+
+b <- lm(data$den1k ~ data$x - 1)
+summary(b)
+
+tsdisplay(residuals(fit.LO), main = "Residuales del modelo de la provincia de Loreto")
+```
+
+As shown in the ACF and PACF plots of the residuals, there are not significant lags, thus, residuals behave like white noise and suggest that the model is correctly specified.
+
+```{r ARIMA LO 2, warning=F, fig.align = "center"}
+hold <- window(ts(ts.LO), start=127)
+fit_no_holdout = arima(ts(ts.LO[-c(127:132)]), order = c(0,0,1), seasonal = list(order=c(0,1,1), period = 12))
+fcast_no_holdout <- forecast(fit_no_holdout,h=6)
+plot(fcast_no_holdout)
+lines(ts(ts.LO))
+```
+
+The forecast for the model was constructed with trained data (dropping the last six months) to compare the forecast with the actual values. The forecast predicts the positive trend of the test data tho it understimates the magnitude.
+
+```{r ARIMA LO 3, warning=F, fig.align = "center"}
+k <- 132-36 # minimum data length for fitting a model
+n <- length(ts.LO)
+mae<- matrix(NA,n-k,12)
+st <- tsp(ts.LO)[1]+(k-2)/12
+
+for(i in 1:(n-k)){
+  xshort <- window(ts.LO, start=st+(i-k+1)/12, end=st+i/12)
+  xnext <- window(ts.LO, start=st + (i+1)/12, end=st + (i+12)/12)
+  fit <- Arima(xshort, order=c(0,0,1), seasonal=list(order=c(0,1,1), period = 12))
+  fcast <- forecast(fit, h=12)
+  mae[i,1:length(xnext)] <- abs(fcast[['mean']]-xnext)
+}
+
+plot(1:12, colMeans(mae,na.rm=TRUE), type="l", col=2, xlab="horizonte", ylab="MAE",
+     ylim=c(0.09,0.16))
+legend("topleft",legend=c("SARIMA"),col=1,lty=1)
+
+```
+
+A 1-12 step forecast was made to have a better estimate of how well the model behaves. This time, the forecast period was of 12 months and this proccess was repeated 36 times. The time series was divided in train and test data sets, the length of the train test was constant but it was moving foward in time on each iteration. Mean Absolute Error (MAE) were calculated for each step and the mean values of MAE for each step are shown on the plot. The overall MAE for the 12 steps is shown in the table below.
+
+```{r ARIMA LO MAE, warning=F}
+df.mae <- data.frame(MAE = c('min', 'max', 'mean'))
+df.mae$value <- NA
+df.mae$value[df.mae$MAE=='min'] <- min(colMeans(mae,na.rm=TRUE))
+df.mae$value[df.mae$MAE=='max'] <- max(colMeans(mae,na.rm=TRUE))
+df.mae$value[df.mae$MAE=='mean'] <- mean(colMeans(mae,na.rm=TRUE))
+(df.mae)
+```
+
+## Mariscal Ramon Castilla
+
+The final model for Mariscal Ramon Castilla is ARIMA(0,0,2)(0,1,1). Model residuals and cross validation are shown next:
+
+```{r ARIMA RC 1, warning=F, fig.align = "center"}
+ts.RC = ts(dt[dt$province == "Mariscal ramon castilla", c('den1k')], frequency = 12, start = 2003) # TS
+fit.RC <- arima(ts.RC, order = c(0,0,2), seasonal = list(order=c(0,1,1), period = 12)) # RMSE
+
+data <- as.data.frame(fitted(fit.RC))
+data <-cbind(data, dt[dt$province == 'Mariscal ramon castilla', c('den1k', 'ts.date')])
+
+b <- lm(data$den1k ~ data$x - 1)
+summary(b)
+
+tsdisplay(residuals(fit.RC), main = "Residuales del modelo de la provincia de Mariscal Ramon Castilla")
+```
+
+As shown in the ACF and PACF plots of the residuals, there are not significant lags, thus, residuals behave like white noise and suggest that the model is correctly specified.
+
+```{r ARIMA RC 2, warning=F, fig.align = "center"}
+hold <- window(ts(ts.RC), start=127)
+fit_no_holdout = arima(ts(ts.RC[-c(127:132)]), order = c(0,0,2), seasonal = list(order=c(0,1,1), period = 12))
+fcast_no_holdout <- forecast(fit_no_holdout,h=6)
+plot(fcast_no_holdout)
+lines(ts(ts.RC))
+```
+
+The forecast for the model was constructed with trained data (dropping the last six months) to compare the forecast with the actual values. The forecast predicts a positive trend of the test data tho no cases were registered on those dates.
+
+```{r ARIMA RC 3, warning=F, fig.align = "center"}
+k <- 132-36 # minimum data length for fitting a model
+n <- length(ts.RC)
+mae<- matrix(NA,n-k,12)
+st <- tsp(ts.RC)[1]+(k-2)/12
+
+for(i in 1:(n-k)){
+  xshort <- window(ts.RC, start=st+(i-k+1)/12, end=st+i/12)
+  xnext <- window(ts.RC, start=st + (i+1)/12, end=st + (i+12)/12)
+  fit <- Arima(xshort, order=c(0,0,2), seasonal=list(order=c(0,1,1), period = 12))
+  fcast <- forecast(fit, h=12)
+  mae[i,1:length(xnext)] <- abs(fcast[['mean']]-xnext)
+}
+
+plot(1:12, colMeans(mae,na.rm=TRUE), type="l", col=2, xlab="horizonte", ylab="MAE",
+     ylim=c(0.09,0.16))
+legend("topleft",legend=c("SARIMA"),col=2,lty=1)
+```
+
+A 1-12 step forecast was made to have a better estimate of how well the model behaves. This time, the forecast period was of 12 months and this proccess was repeated 36 times. The time series was divided in train and test data sets, the length of the train test was constant but it was moving foward in time on each iteration. Mean Absolute Error (MAE) were calculated for each step and the mean values of MAE for each step are shown on the plot. The overall MAE for the 12 steps is shown in the table below.
+
+```{r ARIMA RC MAE, warning=F}
+df.mae <- data.frame(MAE = c('min', 'max', 'mean'))
+df.mae$value <- NA
+df.mae$value[df.mae$MAE=='min'] <- min(colMeans(mae,na.rm=TRUE))
+df.mae$value[df.mae$MAE=='max'] <- max(colMeans(mae,na.rm=TRUE))
+df.mae$value[df.mae$MAE=='mean'] <- mean(colMeans(mae,na.rm=TRUE))
+(df.mae)
+```
+
+## Maynas
+
+The final model for Maynas is ARIMA(0,0,1)(0,1,1). Model residuals and cross validation are shown next:
+
+```{r ARIMA MY 1, warning=F, fig.align = "center"}
+ts.MY = ts(dt[dt$province == "Maynas", c('den1k')], frequency = 12, start = 2003) # TS
+fit.MY <- arima(ts.MY, order = c(0,0,1), seasonal = list(order=c(0,1,1), period = 12)) # RMSE
+
+data <- as.data.frame(fitted(fit.MY))
+data <-cbind(data, dt[dt$province == 'Maynas', c('den1k', 'ts.date')])
+
+b <- lm(data$den1k ~ data$x - 1)
+summary(b)
+
+tsdisplay(residuals(fit.MY), main = "Residuales del modelo de la provincia de Maynas")
+```
+
+As shown in the ACF and PACF plots of the residuals, there are not significant lags, thus, residuals behave like white noise and suggest that the model is correctly specified.
+
+```{r ARIMA MY 2, warning=F, fig.align = "center"}
+hold <- window(ts(ts.MY), start=127)
+fit_no_holdout = arima(ts(ts.MY[-c(127:132)]), order = c(0,0,1), seasonal = list(order=c(0,1,1), period = 12))
+fcast_no_holdout <- forecast(fit_no_holdout,h=6)
+plot(fcast_no_holdout)
+lines(ts(ts.MY))
+```
+
+The forecast for the model was constructed with trained data (dropping the last six months) to compare the forecast with the actual values. The forecast predicts a positive trend and similar slope of the test data.
+
+```{r ARIMA MY 3, warning=F, fig.align = "center"}
+k <- 132-36 # minimum data length for fitting a model
+n <- length(ts.MY)
+mae<- matrix(NA,n-k,12)
+st <- tsp(ts.MY)[1]+(k-2)/12
+
+for(i in 1:(n-k)){
+  xshort <- window(ts.MY, start=st+(i-k+1)/12, end=st+i/12)
+  xnext <- window(ts.MY, start=st + (i+1)/12, end=st + (i+12)/12)
+  fit <- Arima(xshort, order=c(0,0,1), seasonal=list(order=c(0,1,1), period = 12))
+  fcast <- forecast(fit, h=12)
+  mae[i,1:length(xnext)] <- abs(fcast[['mean']]-xnext)
+}
+
+plot(1:12, colMeans(mae,na.rm=TRUE), type="l", col=2, xlab="horizonte", ylab="MAE",
+     ylim=c(0.9,1.6))
+legend("topleft",legend=c("SARIMA"),col=1,lty=1)
+
+```
+
+A 1-12 step forecast was made to have a better estimate of how well the model behaves. This time, the forecast period was of 12 months and this proccess was repeated 36 times. The time series was divided in train and test data sets, the length of the train test was constant but it was moving foward in time on each iteration. Mean Absolute Error (MAE) were calculated for each step and the mean values of MAE for each step are shown on the plot. The overall MAE for the 12 steps is shown in the table below.
+
+```{r ARIMA MY MAE, warning=F}
+df.mae <- data.frame(MAE = c('min', 'max', 'mean'))
+df.mae$value <- NA
+df.mae$value[df.mae$MAE=='min'] <- min(colMeans(mae,na.rm=TRUE))
+df.mae$value[df.mae$MAE=='max'] <- max(colMeans(mae,na.rm=TRUE))
+df.mae$value[df.mae$MAE=='mean'] <- mean(colMeans(mae,na.rm=TRUE))
+(df.mae)
+```
+
+## Requena
+
+The final model for Requena is ARIMA(1,0,0)(0,1,2). Model residuals and cross validation are shown next:
+
+```{r ARIMA RQ 1, warning=F, fig.align = "center"}
+ts.RQ = ts(dt[dt$province == "Requena", c('den1k')], frequency = 12, start = 2003) # TS
+fit.RQ <- arima(ts.RQ, order = c(1,0,0), seasonal = list(order=c(0,1,2), period = 12)) # RMSE
+
+data <- as.data.frame(fitted(fit.RQ))
+data <-cbind(data, dt[dt$province == 'Requena', c('den1k', 'ts.date')])
+
+b <- lm(data$den1k ~ data$x - 1)
+summary(b)
+
+tsdisplay(residuals(fit.RQ), main = "Residuales del modelo de la provincia de Requena")
+```
+
+As shown in the ACF and PACF plots of the residuals, there are not significant lags, thus, residuals behave like white noise and suggest that the model is correctly specified.
+
+```{r ARIMA RQ 2, warning=F, fig.align = "center"}
+hold <- window(ts(ts.RQ), start=127)
+fit_no_holdout = arima(ts(ts.RQ[-c(127:132)]), order = c(1,0,0), seasonal = list(order=c(0,1,2), period = 12))
+fcast_no_holdout <- forecast(fit_no_holdout,h=6)
+plot(fcast_no_holdout)
+lines(ts(ts.RQ))
+```
+
+The forecast for the model was constructed with trained data (dropping the last six months) to compare the forecast with the actual values. The forecast predicts a neutral trend of the test data.
+
+```{r ARIMA RQ 3, warning=F, fig.align = "center"}
+k <- 132-36 # minimum data length for fitting a model
+n <- length(ts.RQ)
+mae<- matrix(NA,n-k,12)
+st <- tsp(ts.RQ)[1]+(k-2)/12
+
+for(i in 1:(n-k)){
+  xshort <- window(ts.RQ, start=st+(i-k+1)/12, end=st+i/12)
+  xnext <- window(ts.RQ, start=st + (i+1)/12, end=st + (i+12)/12)
+  fit <- Arima(xshort, order=c(1,0,0), seasonal=list(order=c(0,1,2), period = 12))
+  fcast <- forecast(fit, h=12)
+  mae[i,1:length(xnext)] <- abs(fcast[['mean']]-xnext)
+}
+
+plot(1:12, colMeans(mae,na.rm=TRUE), type="l", col=2, xlab="horizonte", ylab="MAE",
+     ylim=c(0.02,0.1))
+legend("topleft",legend=c("SARIMA"),col=1,lty=1)
+
+```
+
+A 1-12 step forecast was made to have a better estimate of how well the model behaves. This time, the forecast period was of 12 months and this proccess was repeated 36 times. The time series was divided in train and test data sets, the length of the train test was constant but it was moving foward in time on each iteration. Mean Absolute Error (MAE) were calculated for each step and the mean values of MAE for each step are shown on the plot. The overall MAE for the 12 steps is shown in the table below.
+
+```{r ARIMA RQ MAE, warning=F}
+df.mae <- data.frame(MAE = c('min', 'max', 'mean'))
+df.mae$value <- NA
+df.mae$value[df.mae$MAE=='min'] <- min(colMeans(mae,na.rm=TRUE))
+df.mae$value[df.mae$MAE=='max'] <- max(colMeans(mae,na.rm=TRUE))
+df.mae$value[df.mae$MAE=='mean'] <- mean(colMeans(mae,na.rm=TRUE))
+(df.mae)
+```
+
+## Ucayali
+
+The final model for Ucayali is ARIMA(0,0,1)(0,1,1). Model residuals and cross validation are shown next:
+
+```{r ARIMA UY 1, warning=F, fig.align = "center"}
+ts.UY = ts(dt[dt$province == "Ucayali", c('den1k')], frequency = 12, start = 2003) # TS
+fit.UY <- arima(ts.UY, order = c(0,0,1), seasonal = list(order=c(0,1,1), period = 12)) # RMSE
+
+data <- as.data.frame(fitted(fit.UY))
+data <-cbind(data, dt[dt$province == 'Ucayali', c('den1k', 'ts.date')])
+
+b <- lm(data$den1k ~ data$x - 1)
+summary(b)
+
+tsdisplay(residuals(fit.UY), main = "Residuales del modelo de la provincia de Ucayali")
+```
+
+There are significant lags on the ACF and PACF plot, but there are no particular pattern in the residuals.
+
+```{r ARIMA UY 2, warning=F, fig.align = "center"}
+hold <- window(ts(ts.UY), start=127)
+fit_no_holdout = arima(ts(ts.UY[-c(127:132)]), order = c(0,0,1), seasonal = list(order=c(0,1,1), period = 12))
+fcast_no_holdout <- forecast(fit_no_holdout,h=6)
+plot(fcast_no_holdout)
+lines(ts(ts.UY))
+```
+
+The forecast for the model was constructed with trained data (dropping the last six months) to compare the forecast with the actual values. The forecast predicts a positive trend of the test data tho under estimates the magnitude.
+
+```{r ARIMA UY 3, warning=F, fig.align = "center"}
+k <- 132-36 # minimum data length for fitting a model
+n <- length(ts.UY)
+mae<- matrix(NA,n-k,12)
+st <- tsp(ts.UY)[1]+(k-2)/12
+
+for(i in 1:(n-k)){
+  xshort <- window(ts.UY, start=st+(i-k+1)/12, end=st+i/12)
+  xnext <- window(ts.UY, start=st + (i+1)/12, end=st + (i+12)/12)
+  fit <- Arima(xshort, order=c(0,0,1), seasonal=list(order=c(0,1,1), period = 12))
+  fcast <- forecast(fit, h=12)
+  mae[i,1:length(xnext)] <- abs(fcast[['mean']]-xnext)
+}
+
+plot(1:12, colMeans(mae,na.rm=TRUE), type="l", col=2, xlab="horizonte", ylab="MAE",
+     ylim=c(0.05,0.2))
+legend("topleft",legend=c("SARIMA"),col=1,lty=1)
+
+```
+
+A 1-12 step forecast was made to have a better estimate of how well the model behaves. This time, the forecast period was of 12 months and this proccess was repeated 36 times. The time series was divided in train and test data sets, the length of the train test was constant but it was moving foward in time on each iteration. Mean Absolute Error (MAE) were calculated for each step and the mean values of MAE for each step are shown on the plot. The overall MAE for the 12 steps is shown in the table below.
+
+
+```{r ARIMA UY MAE, warning=F}
+df.mae <- data.frame(MAE = c('min', 'max', 'mean'))
+df.mae$value <- NA
+df.mae$value[df.mae$MAE=='min'] <- min(colMeans(mae,na.rm=TRUE))
+df.mae$value[df.mae$MAE=='max'] <- max(colMeans(mae,na.rm=TRUE))
+df.mae$value[df.mae$MAE=='mean'] <- mean(colMeans(mae,na.rm=TRUE))
+(df.mae)
+```
+
+
+# External regressors {.tabset .tabset-pills}
+
+Environmental data was extracted from different sources that are mentioned in the table below:
+
+```{r data sources table}
+datatable(data_sources, rownames = FALSE, filter="top", options = list(pageLength = 5, scrollX=T) )
+```
+
+In this section we are going to improve our model using environmental variables time series as external regressors. The environmental variables that we are going to use are:
+
+  - Mean temperature
+  - Maximum temperature
+  - Minimum temperature
+  - Land surface temperature
+  - Precipitation
+  - Normallized difference vegetation index (NDVI)
+  - Normallized difference water index (NDWI)
+  - Enhanced vegetation index (EVI)
+  - Evaporation (EVP)
+  - Evapotranspiration (ET)
+  - Runoff
+  - Surface water volumetric layer 1 (SWVL1)
+
+```{r  All variables density plots, warning=F, fig.width=20, fig.height=15}
+jet.colors <- colorRampPalette(c("#00007F", "blue", "#007FFF", "cyan", "#7FFF7F", "yellow", "#FF7F00", "red", "#7F0000"))
+variables <- unique(df.long$variable)
+for (i in variables) {
+ temp <- ggplot(df.long[df.long$variable == i,], aes(x=as.numeric(mm), y=as.numeric(yy))) +
+  geom_tile(aes(fill=value))+
+  scale_fill_gradientn(colours = jet.colors(10)) +
+  scale_x_continuous(breaks = 1:12,labels = 1:12)+
+  scale_y_continuous(breaks = 2003:2013,labels = 2003:2013) +
+  ylab("Año") + xlab("Mes") + 
+   theme(axis.text.x = element_text(angle = 0, hjust = 0, size = 15, face = "bold"),
+        axis.text.y = element_text(hjust = 1, size = 15),
+        axis.title = element_text(size = 14, face = "bold"),
+        title = element_text(size = 30, face = "bold"),
+        legend.position = "none"
+        )+
+   labs(title = i)
+ assign(paste0("density.plot.", i), temp)
+}
+density.plot2 <- plot_grid(density.plot.meanTemp, density.plot.maxTemp,
+                           density.plot.minTemp, density.plot.LST, density.plot.precipitation, 
+                           density.plot.NDVI, density.plot.NDWI, density.plot.EVI, density.plot.ET, 
+                           density.plot.evp, density.plot.runoff, density.plot.swvl1)
+title <- ggdraw() + draw_label("Series de tiempo de las variables ambientales y meteorológicas", fontface='bold', size = 30)
+(density.plot <- plot_grid(title, density.plot2, ncol = 1, rel_heights=c(0.1, 1)))
+#ggsave(filename = "plots/density_plot.png", plot = density.plot)
+```
+
+It exist a clear seasonality on the time series of the environmental variables on the department of Loreto. Maximun values (redish colors) and minimum values (bluish colors) of the environmental variables does not occur on the same dates across the variables and the peaks and lows of some of them are not concurrent with the peaks and lows of the number of dengue cases.
+
+To include this variables as external regressors for our model we will first explore the cross correlation of each variable with the number of cases on a given province at different lags.In the following section we will create time series of the environmental variables for each province and use them to improve our models. 
+
+Our rules to include this variables are the following:
+
+- Accuracy of the model will be measured with the MAE, lower MAE model will be selected as best models.
+- First, Each variable will be tested individually with the number of cases:
+  - Lag 0 will allways be considered for testing even if the correlation is not significant.
+  - The number and the order of lags for a given variable will be selected based on the cross correlation plots.
+  - Several model will be constructed for a given variable, which will include (1) the variable with no lag, (2) each of the lags selected based on cross correlation and (3) a combination of consecutive lags.
+  - The model with the lowest MAE will be selected and that will represent the variable on mention. For example, if the best model for precipitation is the precipitation with a lag of 3 months, this lag will be used when we include other variables.
+- Final lags or acummulation of lags of each variable will be compared against each other. And the variable with the lowest MAE will be selected.
+
+## Alto Amazonas
+<br><br>
+
+### Environmental variables time series and lagged predictors {.tabset .tabset-fade}
+<br><br>
+
+```{r time series variables AM, warning=F}
+ts.AM = ts(dt[dt$province == "Alto amazonas", c('den1k')], frequency = 12, start = 2003) # TS
+meanTemp.AM = ts(dt[dt$province == "Alto amazonas", c('meanTemperature')], frequency = 12, start = 2003) # TS
+maxTemp.AM = ts(dt[dt$province == "Alto amazonas", c('maxTemperature')], frequency = 12, start = 2003) # TS
+minTemp.AM = ts(dt[dt$province == "Alto amazonas", c('minTemperature')], frequency = 12, start = 2003) # TS
+prec.AM = ts(dt[dt$province == "Alto amazonas", c('precipitation')], frequency = 12, start = 2003) # TS
+ndvi.AM = ts(dt[dt$province == "Alto amazonas", c('NDVI')], frequency = 12, start = 2003) # TS
+ndwi.AM = ts(dt[dt$province == "Alto amazonas", c('NDWI')], frequency = 12, start = 2003) # TS
+evi.AM = ts(dt[dt$province == "Alto amazonas", c('EVI')], frequency = 12, start = 2003) # TS
+et.AM = ts(dt[dt$province == "Alto amazonas", c('ET')], frequency = 12, start = 2003) # TS
+evp.AM = ts(dt[dt$province == "Alto amazonas", c('evp')], frequency = 12, start = 2003) # TS
+lst.AM = ts(dt[dt$province == "Alto amazonas", c('LST')], frequency = 12, start = 2003) # TS
+runoff.AM = ts(dt[dt$province == "Alto amazonas", c('runoff')], frequency = 12, start = 2003) # TS
+swvl1.AM = ts(dt[dt$province == "Alto amazonas", c('swvl1')], frequency = 12, start = 2003) # TS
+```
+
+```{r cross correlation AM, warning=F, fig.align = "center"}
+
+env.var <- list(meanTemp.AM, maxTemp.AM, minTemp.AM, prec.AM, ndvi.AM, ndwi.AM, evi.AM, et.AM, evp.AM, lst.AM, 
+            runoff.AM, swvl1.AM)
+for (i in 1:length(env.var)) { # iterate between environmental factors
+  
+  # ccf and pacf plots
+  temp.ccf <- ccf(as.numeric(env.var[[i]]), as.numeric(ts.AM), type = "correlation", plot = FALSE) # ccf
+  temp.ccfdf <- with(temp.ccf, data.frame(lag, acf)) # get df from ccf to plot it with ggplot
+  conf.level <- 0.95 # confidence level
+  ciline <- qnorm((1 - conf.level)/2)/sqrt(length(ts.AM)) # confidence lines
+  #ccf
+  q <- ggplot(data = temp.ccfdf, mapping = aes(x = lag, y = acf)) +
+      geom_hline(aes(yintercept = 0)) +
+      geom_segment(mapping = aes(xend = lag, yend = 0))+
+      geom_hline(aes(yintercept = ciline), linetype = 3, color = 'darkblue') + 
+      geom_hline(aes(yintercept = -ciline), linetype = 3, color = 'darkblue')+
+      labs(title = colnames(env.var[[i]]))+
+      theme_bw() +
+      theme(panel.grid = element_blank(),
+            axis.text.x = element_text(angle = 0, vjust=0.5, size = 8),
+            axis.text.y = element_text(angle = 0, vjust=0.5, size = 8),
+            axis.title= element_text(size=8,face="bold"),
+            title = element_text(angle = 0, vjust=0.5, size = 8, face = 'bold'))
+ 
+  #
+  assign(paste0('ccf.', i), q)
+}
+#crosscorrelation.plots <- mget(ls(pattern = 'ccf.*'))
+crosscorrelation.plots <- mget(c('ccf.1', 'ccf.2', "ccf.3", "ccf.4", "ccf.5", "ccf.6", "ccf.7", "ccf.8", 
+                                 "ccf.9", "ccf.10", "ccf.11", "ccf.12"))
+
+(plot.ccf <- do.call(plot_grid, crosscorrelation.plots))
+#ggsave(filename = "plots/AM_ccf.png", plot = plot.ccf)
+```
+
+- Mean temperature: 0, 1, and 2
+- Maximum temperature: 0, 1, and 2
+- Minimum temperature: 0, and 1
+- Precipitation: 0, and 1
+- NDVI: 0, 3, 4, 5, and 6
+- NDWI: 0, and 1
+- EVI: 0, 2, 3, 4, 5, and 6
+- Evaporation: 0, 1, 2, 3, and 4
+- Land surface temperature: 0, 2, 3, and 4
+- Runoff: 0, 1, 2, 3, 4, and 5
+- Surface water volumetric layer: 0, 1, 2, 3, 4, and 5
+
+```{r data management2 AM, warning=F}
+
+# lagged predictors
+## mean temp
+meanTemp.lags.AM <- ts(cbind(
+  meanTemp.Lag0 = meanTemp.AM,
+  meanTemp.Lag1 = stats::lag(meanTemp.AM, -1),
+  meanTemp.Lag2 = stats::lag(meanTemp.AM, -2)
+), start = 2003, frequency = 12)
+
+meanTemp.lags.AM <- ts(meanTemp.lags.AM[1:132, 1:3], start = 2003, frequency = 12)
+## max temp
+maxTemp.lags.AM <- ts(cbind(
+  maxTemp.Lag0 = maxTemp.AM,
+  maxTemp.Lag1 = stats::lag(maxTemp.AM, -1),
+  maxTemp.Lag2 = stats::lag(maxTemp.AM, -2)
+), start = 2003, frequency = 12)
+
+maxTemp.lags.AM <- ts(maxTemp.lags.AM[1:132, 1:3], start = 2003, frequency = 12)
+## min temp
+minTemp.lags.AM <- ts(cbind(
+  minTemp.Lag0 = minTemp.AM,
+  minTemp.Lag1 = stats::lag(minTemp.AM, -1)
+), start = 2003, frequency = 12)
+
+minTemp.lags.AM <- ts(minTemp.lags.AM[1:132, 1:2], start = 2003, frequency = 12)
+## precipitation
+prec.lags.AM <- ts(cbind(
+  prec.Lag0 = prec.AM,
+  prec.Lag1 = stats::lag(prec.AM, -1)
+), start = 2003, frequency = 12)
+
+prec.lags.AM <- ts(prec.lags.AM[1:132, 1:2], start = 2003, frequency = 12)
+## ndvi
+ndvi.lags.AM <- ts(cbind(
+  ndvi.Lag0 = ndvi.AM,
+  ndvi.Lag3 = stats::lag(ndvi.AM, -3),
+  ndvi.Lag4 = stats::lag(ndvi.AM, -4),
+  ndvi.Lag5 = stats::lag(ndvi.AM, -5),
+  ndvi.Lag6 = stats::lag(ndvi.AM, -6)
+), start = 2003, frequency = 12)
+
+ndvi.lags.AM <- ts(ndvi.lags.AM[1:132, 1:5], start = 2003, frequency = 12)
+## ndwi
+ndwi.lags.AM <- ts(cbind(
+  ndwi.Lag0 = ndwi.AM,
+  ndwi.Lag1 = stats::lag(ndwi.AM, -1)
+), start = 2003, frequency = 12)
+
+ndwi.lags.AM <- ts(ndwi.lags.AM[1:132, 1:2], start = 2003, frequency = 12)
+## evi
+evi.lags.AM <- ts(cbind(
+  evi.Lag0 = evi.AM,
+  evi.Lag2 = stats::lag(evi.AM, -2),
+  evi.Lag3 = stats::lag(evi.AM, -3),
+  evi.Lag4 = stats::lag(evi.AM, -4),
+  evi.Lag5 = stats::lag(evi.AM, -5),
+  evi.Lag6 = stats::lag(evi.AM, -6)
+), start = 2003, frequency = 12)
+
+evi.lags.AM <- ts(evi.lags.AM[1:132, 1:6], start = 2003, frequency = 12)
+## evaporation
+evp.lags.AM <- ts(cbind(
+  evp.Lag0 = evp.AM,
+  evp.Lag1 = stats::lag(evp.AM, -1),
+  evp.Lag2 = stats::lag(evp.AM, -2),
+  evp.Lag3 = stats::lag(evp.AM, -3),
+  evp.Lag4 = stats::lag(evp.AM, -4)
+), start = 2003, frequency = 12)
+
+evp.lags.AM <- ts(evp.lags.AM[1:132, 1:5], start = 2003, frequency = 12)
+## lst
+lst.lags.AM <- ts(cbind(
+  lst.Lag0 = lst.AM,
+  lst.Lag2 = stats::lag(lst.AM, -2),
+  lst.Lag3 = stats::lag(lst.AM, -3),
+  lst.Lag4 = stats::lag(lst.AM, -4)
+), start = 2003, frequency = 12)
+
+lst.lags.AM <- ts(lst.lags.AM[1:132, 1:4], start = 2003, frequency = 12)
+## runoff
+runoff.lags.AM <- ts(cbind(
+  runoff.Lag0 = runoff.AM,
+  runoff.Lag1 = stats::lag(runoff.AM, -1),
+  runoff.Lag2 = stats::lag(runoff.AM, -2),
+  runoff.Lag3 = stats::lag(runoff.AM, -3),
+  runoff.Lag4 = stats::lag(runoff.AM, -4),
+  runoff.Lag5 = stats::lag(runoff.AM, -5)
+), start = 2003, frequency = 12)
+
+runoff.lags.AM <- ts(runoff.lags.AM[1:132, 1:6], start = 2003, frequency = 12)
+## swvl1
+swvl1.lags.AM <- ts(cbind(
+  swvl1.Lag0 = swvl1.AM,
+  swvl1.Lag1 = stats::lag(swvl1.AM, -1),
+  swvl1.Lag2 = stats::lag(swvl1.AM, -2),
+  swvl1.Lag3 = stats::lag(swvl1.AM, -3),
+  swvl1.Lag4 = stats::lag(swvl1.AM, -4),
+  swvl1.Lag5 = stats::lag(swvl1.AM, -5)
+), start = 2003, frequency = 12)
+
+swvl1.lags.AM <- ts(swvl1.lags.AM[1:132, 1:6], start = 2003, frequency = 12)
+
+```
+
+#### Mean temperature 
+
+Mean temperature with 1 month of lag was the best model, we will use this variable for our next models.
+
+```{r lagged mean temperature AM, warning=F}
+meanTemp.df.AM <- arima.xreg.12step.lagvars(ts.AM, meanTemp.lags.AM, 0,0,1,0,1,1)
+variables <- c("ARIMA", "meanTemp", "meanTemp 2 lags", "meanTemp 3 lags")
+for (i in 1:length(variables)) {
+  meanTemp.df.AM[[2]][i, 'variable']<- variables[i]
+}
+meanTemp.df.AM2 <- arima.xreg.12step.separateLags(ts.AM, meanTemp.lags.AM, 0,0,1,0,1,1)
+variables <- c("ARIMA", "meanTemp", "meanTemp.Lag1", "meanTemp.Lag2")
+for (i in 1:length(variables)) {
+  meanTemp.df.AM2[[2]][i, 'variable']<- variables[i]
+}
+meanTemp.df.AM3 <- rbind(meanTemp.df.AM[[2]], meanTemp.df.AM2[[2]])
+meanTemp.df.AM3 <- meanTemp.df.AM3[!duplicated(meanTemp.df.AM3),]
+meanTemp.df.AM3
+```
+
+#### Max temperature 
+
+Maximum temperature with 2 months of lag was the best model, we will use this variable for our next models.
+
+```{r lagged max temperature AM, warning=F}
+maxTemp.df.AM <- arima.xreg.12step.lagvars(ts.AM, maxTemp.lags.AM, 0,0,1,0,1,1)
+variables <- c("ARIMA", "maxTemp", "maxTemp 2 lags", "maxTemp 3 lags")
+for (i in 1:length(variables)) {
+  maxTemp.df.AM[[2]][i, 'variable']<- variables[i]
+}
+maxTemp.df.AM2 <- arima.xreg.12step.separateLags(ts.AM, maxTemp.lags.AM, 0,0,1,0,1,1)
+variables <- c("ARIMA", "maxTemp", "maxTemp.Lag1", "maxTemp.Lag2")
+for (i in 1:length(variables)) {
+  maxTemp.df.AM2[[2]][i, 'variable']<- variables[i]
+}
+maxTemp.df.AM3 <- rbind(maxTemp.df.AM[[2]], maxTemp.df.AM2[[2]])
+maxTemp.df.AM3 <- maxTemp.df.AM3[!duplicated(maxTemp.df.AM3),]
+maxTemp.df.AM3
+```
+
+#### Min temperature 
+
+Minimum temperature with 2 consecutive lags was the model with the lowest MAE, meaning that we will use mean temperature with 0 and 1 month of lag together in our next models.
+
+```{r lagged min temperature AM, warning=F}
+minTemp.df.AM <- arima.xreg.12step.lagvars(ts.AM, minTemp.lags.AM, 0,0,1,0,1,1)
+variables <- c("ARIMA", "minTemp", "minTemp 2 lags")
+for (i in 1:length(variables)) {
+  minTemp.df.AM[[2]][i, 'variable']<- variables[i]
+}
+minTemp.df.AM2 <- arima.xreg.12step.separateLags(ts.AM, minTemp.lags.AM, 0,0,1,0,1,1)
+variables <- c("ARIMA", "minTemp", "minTemp.Lag1")
+for (i in 1:length(variables)) {
+  minTemp.df.AM2[[2]][i, 'variable']<- variables[i]
+}
+minTemp.df.AM3 <- rbind(minTemp.df.AM[[2]], minTemp.df.AM2[[2]])
+minTemp.df.AM3 <- minTemp.df.AM3[!duplicated(minTemp.df.AM3),]
+minTemp.df.AM3
+```
+
+#### Precipitation 
+
+Precipitation with 0 months of lag was the best model, we will use this variable for our next models.
+
+```{r lagged precipitation AM, warning=F}
+prec.df.AM <- arima.xreg.12step.lagvars(ts.AM, prec.lags.AM, 0,0,1,0,1,1)
+variables <- c("ARIMA", "prec", "prec 2 lags")
+for (i in 1:length(variables)) {
+  prec.df.AM[[2]][i, 'variable']<- variables[i]
+}
+prec.df.AM2 <- arima.xreg.12step.separateLags(ts.AM, prec.lags.AM, 0,0,1,0,1,1)
+variables <- c("ARIMA", "prec", "prec.Lag1")
+for (i in 1:length(variables)) {
+  prec.df.AM2[[2]][i, 'variable']<- variables[i]
+}
+prec.df.AM3 <- rbind(prec.df.AM[[2]], prec.df.AM2[[2]])
+prec.df.AM3 <- prec.df.AM3[!duplicated(prec.df.AM3),]
+prec.df.AM3
+```
+
+#### NDVI 
+
+NDVI with 0 months of lag was the best model, we will use this variable for our next models.
+
+```{r lagged ndvi AM, warning=F}
+ndvi.df.AM <- arima.xreg.12step.lagvars(ts.AM, ndvi.lags.AM, 0,0,1,0,1,1)
+variables <- c("ARIMA", "ndvi", "ndvi 2 lags", "ndvi 3 lags", "ndvi 4 lags", "ndvi 5 lags")
+for (i in 1:length(variables)) {
+  ndvi.df.AM[[2]][i, 'variable']<- variables[i]
+}
+ndvi.df.AM2 <- arima.xreg.12step.separateLags(ts.AM, ndvi.lags.AM, 0,0,1,0,1,1)
+variables <- c("ARIMA", "ndvi", "ndvi.Lag3", "ndvi.Lag4", "ndvi.Lag5", "ndvi.Lag6")
+for (i in 1:length(variables)) {
+  ndvi.df.AM2[[2]][i, 'variable']<- variables[i]
+}
+ndvi.df.AM3 <- rbind(ndvi.df.AM[[2]], ndvi.df.AM2[[2]])
+ndvi.df.AM3 <- ndvi.df.AM3[!duplicated(ndvi.df.AM3),]
+ndvi.df.AM3
+```
+
+#### NDWI 
+
+NDWI with 0 months of lag was the best model, we will use this variable for our next models.
+
+```{r lagged ndwi AM, warning=F}
+ndwi.df.AM <- arima.xreg.12step.lagvars(ts.AM, ndwi.lags.AM, 0,0,1,0,1,1)
+variables <- c("ARIMA", "ndwi", "ndwi 2 lags")
+for (i in 1:length(variables)) {
+  ndwi.df.AM[[2]][i, 'variable']<- variables[i]
+}
+ndwi.df.AM2 <- arima.xreg.12step.separateLags(ts.AM, ndwi.lags.AM, 0,0,1,0,1,1)
+variables <- c("ARIMA", "ndwi", "ndwi.Lag1")
+for (i in 1:length(variables)) {
+  ndwi.df.AM2[[2]][i, 'variable']<- variables[i]
+}
+ndwi.df.AM3 <- rbind(ndwi.df.AM[[2]], ndwi.df.AM2[[2]])
+ndwi.df.AM3 <- ndwi.df.AM3[!duplicated(ndwi.df.AM3),]
+ndwi.df.AM3
+```
+
+#### EVI 
+
+EVI with 2 consecutive lags was the model with the lowest MAE, meaning that we will use mean temperature with 0 and 2 months of lag together in our next models.
+
+```{r lagged EVI AM, warning=F}
+evi.df.AM <- arima.xreg.12step.lagvars(ts.AM, evi.lags.AM, 0,0,1,0,1,1)
+variables <- c("ARIMA", "evi", "evi 2 lags", "evi 3 lags", "evi 4 lags", "evi 5 lags", "evi 6 lags")
+for (i in 1:length(variables)) {
+  evi.df.AM[[2]][i, 'variable']<- variables[i]
+}
+evi.df.AM2 <- arima.xreg.12step.separateLags(ts.AM, evi.lags.AM, 0,0,1,0,1,1)
+variables <- c("ARIMA", "evi", "evi.Lag2", "evi.Lag3", "evi.Lag4", "evi.Lag5", "evi.Lag6")
+for (i in 1:length(variables)) {
+  evi.df.AM2[[2]][i, 'variable']<- variables[i]
+}
+evi.df.AM3 <- rbind(evi.df.AM[[2]], evi.df.AM2[[2]])
+evi.df.AM3 <- evi.df.AM3[!duplicated(evi.df.AM3),]
+evi.df.AM3
+```
+
+#### Evaporation 
+
+Evaporation with 5 consecutive lags was the model with the lowest MAE, meaning that we will use mean temperature with 0, 1, 2, 3 and 4 months of lag together in our next models.
+
+```{r lagged EVP AM, warning=F}
+evp.df.AM <- arima.xreg.12step.lagvars(ts.AM, evp.lags.AM, 0,0,1,0,1,1)
+variables <- c("ARIMA", "evp", "evp 2 lags", "evp 3 lags", "evp 4 lags", "evp 5 lags")
+for (i in 1:length(variables)) {
+  evp.df.AM[[2]][i, 'variable']<- variables[i]
+}
+evp.df.AM2 <- arima.xreg.12step.separateLags(ts.AM, evp.lags.AM, 0,0,1,0,1,1)
+variables <- c("ARIMA", "evp", "evp.Lag1", "evp.Lag2", "evp.Lag3", "evp.Lag4")
+for (i in 1:length(variables)) {
+  evp.df.AM2[[2]][i, 'variable']<- variables[i]
+}
+evp.df.AM3 <- rbind(evp.df.AM[[2]], evp.df.AM2[[2]])
+evp.df.AM3 <- evp.df.AM3[!duplicated(evp.df.AM3),]
+evp.df.AM3
+```
+
+#### Land surface temperature 
+
+Land surface temperature with 3 months of lag was the best model, we will use this variable for our next models.
+
+```{r lagged LST AM, warning=F}
+lst.df.AM <- arima.xreg.12step.lagvars(ts.AM, lst.lags.AM, 0,0,1,0,1,1)
+variables <- c("ARIMA", "lst", "lst 2 lags", "lst 3 lags", "lst 4 lags")
+for (i in 1:length(variables)) {
+  lst.df.AM[[2]][i, 'variable']<- variables[i]
+}
+lst.df.AM2 <- arima.xreg.12step.separateLags(ts.AM, lst.lags.AM, 0,0,1,0,1,1)
+variables <- c("ARIMA", "lst", "lst.Lag2", "lst.Lag3", "lst.Lag4")
+for (i in 1:length(variables)) {
+  lst.df.AM2[[2]][i, 'variable']<- variables[i]
+}
+lst.df.AM3 <- rbind(lst.df.AM[[2]], lst.df.AM2[[2]])
+lst.df.AM3 <- lst.df.AM3[!duplicated(lst.df.AM3),]
+lst.df.AM3
+```
+
+#### Runoff 
+
+Runoff with 0 months of lag was the best model, we will use this variable for our next models.
+
+```{r lagged runoff AM, warning=F}
+runoff.df.AM <- arima.xreg.12step.lagvars(ts.AM, runoff.lags.AM, 0,0,1,0,1,1)
+variables <- c("ARIMA", "runoff", "runoff 2 lags", "runoff 3 lags", "runoff 4 lags", "runoff 5 lags", "runoff 6 lags")
+for (i in 1:length(variables)) {
+  runoff.df.AM[[2]][i, 'variable']<- variables[i]
+}
+runoff.df.AM2 <- arima.xreg.12step.separateLags(ts.AM, runoff.lags.AM, 0,0,1,0,1,1)
+variables <- c("ARIMA", "runoff", "runoff.Lag1", "runoff.Lag2", "runoff.Lag3", "runoff.Lag4", "runoff.Lag5")
+for (i in 1:length(variables)) {
+  runoff.df.AM2[[2]][i, 'variable']<- variables[i]
+}
+runoff.df.AM3 <- rbind(runoff.df.AM[[2]], runoff.df.AM2[[2]])
+runoff.df.AM3 <- runoff.df.AM3[!duplicated(runoff.df.AM3),]
+runoff.df.AM3
+```
+
+#### Surface water volumetric layer 1 
+
+Surface water volumetric layer with 3 months of lag was the best model, we will use this variable for our next models.
+
+```{r lagged swvl1 AM, warning=F}
+swvl1.df.AM <- arima.xreg.12step.lagvars(ts.AM, swvl1.lags.AM, 0,0,1,0,1,1)
+variables <- c("ARIMA", "swvl1", "swvl1 2 lags", "swvl1 3 lags", "swvl1 4 lags", "swvl1 5 lags", "swvl1 6 lags")
+for (i in 1:length(variables)) {
+  swvl1.df.AM[[2]][i, 'variable']<- variables[i]
+}
+swvl1.df.AM2 <- arima.xreg.12step.separateLags(ts.AM, swvl1.lags.AM, 0,0,1,0,1,1)
+variables <- c("ARIMA", "swvl1", "swvl1.Lag1", "swvl1.Lag2", "swvl1.Lag3", "swvl1.Lag4", "swvl1.Lag5")
+for (i in 1:length(variables)) {
+  swvl1.df.AM2[[2]][i, 'variable']<- variables[i]
+}
+swvl1.df.AM3 <- rbind(swvl1.df.AM[[2]], swvl1.df.AM2[[2]])
+swvl1.df.AM3 <- swvl1.df.AM3[!duplicated(swvl1.df.AM3),]
+swvl1.df.AM3
+```
+
+### Model fitting with external regressors
+
+Now we will compare our final variables and pick the first to include in our final model.
+
+#### each parameter 
+
+```{r data management3 AM, warning=F}
+parameters.AM <- cbind(
+  ts = ts.AM,
+  meanTemp.Lag1 = stats::lag(meanTemp.AM, -1),
+  maxTemp.Lag2 = stats::lag(maxTemp.AM, -2),
+  minTemp.Lag0 = minTemp.AM,
+  minTemp.Lag1 = stats::lag(minTemp.AM, -1),
+  prec.Lag0 = prec.AM,
+  ndvi.Lag0 = ndvi.AM,
+  ndwi.Lag0 = ndwi.AM,
+  evi.Lag0 = evi.AM, 
+  evi.Lag2 = stats::lag(evi.AM, -2),
+  evp.Lag0 = evp.AM,
+  evp.Lag1 = stats::lag(evp.AM, -1),
+  evp.Lag2 = stats::lag(evp.AM, -2),
+  evp.Lag3 = stats::lag(evp.AM, -3),
+  evp.Lag4 = stats::lag(evp.AM, -4),
+  lst.Lag3 = stats::lag(lst.AM, -3),
+  runoff.Lag0 = runoff.AM, 
+  swvl1.Lag3 = stats::lag(swvl1.AM, -3)
+)
+
+parameters.AM <- ts(parameters.AM[1:132, 1:18], start = 2003, frequency = 12)
+```
+
+EVI has the lowest MAE with 0.4274103, we will use this combination for our next iteration.
+
+```{r each parameter AM, warning=F}
+variables <- c("meanTemp.", "maxTemp.", "minTemp.", "prec.", "ndvi.", "ndwi.", "evi.", "evp.", "lst.", "runoff.", "swvl1.")
+eachparameter.AM <-arima.xreg.12step(parameters.AM, variables, 0,0,1,0,1,1)
+variables <- c("SARIMA", "meanTemp.", "maxTemp.", "minTemp.", "prec.", "ndvi.", "ndwi.", "evi.", "evp.", "lst.", "runoff.", "swvl1.")
+for (i in 1:length(variables)) {
+  eachparameter.AM[[2]][i, 'variable']<- variables[i]
+}
+eachparameter.AM[[2]]
+
+(g <- ggplot()+ 
+  geom_line(aes(1:12, eachparameter.AM[[1]][1,], colour = 'SARIMA')) + 
+  geom_line(aes(1:12, eachparameter.AM[[1]][8,], colour = 'EVI')) +
+  labs(x = 'Horizonte', y = 'MAE', colour = 'Modelo')+
+  scale_x_continuous(breaks = 1:12)+
+  theme(legend.position = "bottom",
+        legend.box.background = element_rect(),
+        legend.text = element_text(size = 10)
+        ))
+#ggsave(filename = "plots/AM_step0.png", plot = g)
+```
+
+#### EVI
+
+The addition on minimum temperature to our model that already has EVI as external regressor has the lowest MAE with 0.4186033, we will use this combination for our next iteration.
+
+```{r step 1 AM, warning=F}
+variables <- c("meanTemp.", "maxTemp.", "minTemp.", "prec.", "ndvi.", "ndwi.", "evi.", "evp.", "lst.", "runoff.", "swvl1.")
+keep <- c("evi.")
+model.evi.AM <- arima.xreg.12step.keep(parameters.AM, variables, keep, 0,0,1,0,1,1)
+names <- c("SARIMA", "+meanTemp.", "+maxTemp.", "+minTemp.", "+prec.", "+ndvi.", "+ndwi.", "+evp.", "+lst.", "+runoff.", "+swvl1.")
+for (i in 1:length(names)) {
+  model.evi.AM[[2]][i, 'variable']<- names[i]
+}
+model.evi.AM[[2]]
+
+(g <-ggplot()+ 
+  geom_line(aes(1:12, model.evi.AM[[1]][1,], colour = 'SARIMA')) + 
+  geom_line(aes(1:12, eachparameter.AM[[1]][8,], colour = 'EVI')) +
+  geom_line(aes(1:12, model.evi.AM[[1]][4,], colour = 'EVI+MinTemp')) +
+  labs(x = 'Horizonte', y = 'MAE', colour = 'Modelo')+
+  scale_x_continuous(breaks = 1:12)+
+  theme(legend.position = "bottom",
+        legend.box.background = element_rect(),
+        legend.text = element_text(size = 10)
+        ))
+#ggsave(filename = "plots/AM_step1.png", plot = g)
+```
+
+#### EVI + minTemp
+
+No further improvement to our model was achieved, so our final model will include EVI and minimum temperature as external regressors for the dengue cases in the province of Alto Amazonas.
+
+```{r step2 AM, warning=F}
+variables <- c("meanTemp.", "maxTemp.", "minTemp.", "prec.", "ndvi.", "ndwi.", "evi.", "evp.", "lst.", "runoff.", "swvl1.")
+keep <- c("ndvi.", "minTemp.")
+model.evi.minTemp.AM <- arima.xreg.12step.keep(parameters.AM, variables, keep, 0,0,1,0,1,1)
+names <- c("SARIMA", "+meanTemp.", "+maxTemp.", "+prec.", "+ndvi.", "+ndwi.", "+evp.", "+lst.", "+runoff.", "+swvl1.")
+for (i in 1:length(names)) {
+  model.evi.minTemp.AM[[2]][i, 'variable']<- names[i]
+}
+model.evi.minTemp.AM[[2]]
+
+(g <- ggplot()+ 
+  geom_line(aes(1:12, model.evi.minTemp.AM[[1]][1,], colour = 'SARIMA')) + 
+  geom_line(aes(1:12, model.evi.AM[[1]][4,], colour = 'EVI+MinTemp')) +
+  labs(x = 'Horizonte', y = 'MAE', colour = 'Modelo')+
+  scale_x_continuous(breaks = 1:12)+
+  theme(legend.position = "bottom",
+        legend.box.background = element_rect(),
+        legend.text = element_text(size = 10)
+        ))
+#ggsave(filename = "plots/AM_step2.png", plot = g)
+```
+
+
+## Datem del Marañon
+
+### Environmental variables time series and lagged predictors {.tabset .tabset-fade}
+```{r time series variables DM, warning=F}
+ts.DM = ts(dt[dt$province == "Datem del marañon", c('den1k')], frequency = 12, start = 2003) # TS
+meanTemp.DM = ts(dt[dt$province == "Datem del marañon", c('meanTemperature')], frequency = 12, start = 2003) # TS
+maxTemp.DM = ts(dt[dt$province == "Datem del marañon", c('maxTemperature')], frequency = 12, start = 2003) # TS
+minTemp.DM = ts(dt[dt$province == "Datem del marañon", c('minTemperature')], frequency = 12, start = 2003) # TS
+prec.DM = ts(dt[dt$province == "Datem del marañon", c('precipitation')], frequency = 12, start = 2003) # TS
+ndvi.DM = ts(dt[dt$province == "Datem del marañon", c('NDVI')], frequency = 12, start = 2003) # TS
+ndwi.DM = ts(dt[dt$province == "Datem del marañon", c('NDWI')], frequency = 12, start = 2003) # TS
+evi.DM = ts(dt[dt$province == "Datem del marañon", c('EVI')], frequency = 12, start = 2003) # TS
+et.DM = ts(dt[dt$province == "Datem del marañon", c('ET')], frequency = 12, start = 2003) # TS
+evp.DM = ts(dt[dt$province == "Datem del marañon", c('evp')], frequency = 12, start = 2003) # TS
+lst.DM = ts(dt[dt$province == "Datem del marañon", c('LST')], frequency = 12, start = 2003) # TS
+runoff.DM = ts(dt[dt$province == "Datem del marañon", c('runoff')], frequency = 12, start = 2003) # TS
+swvl1.DM = ts(dt[dt$province == "Datem del marañon", c('swvl1')], frequency = 12, start = 2003) # TS
+```
+
+```{r cross correlation DM, warning=F, fig.align = "center"}
+
+env.var <- list(meanTemp.DM, maxTemp.DM, minTemp.DM, prec.DM, ndvi.DM, ndwi.DM, evi.DM, et.DM, evp.DM, lst.DM, 
+            runoff.DM, swvl1.DM)
+for (i in 1:length(env.var)) { # iterate between environmental factors
+  
+  # ccf and pacf plots
+  temp.ccf <- ccf(as.numeric(env.var[[i]]), as.numeric(ts.DM), type = "correlation", plot = FALSE) # ccf
+  temp.ccfdf <- with(temp.ccf, data.frame(lag, acf)) # get df from ccf to plot it with ggplot
+  conf.level <- 0.95 # confidence level
+  ciline <- qnorm((1 - conf.level)/2)/sqrt(length(ts.DM)) # confidence lines
+  #ccf
+  q <- ggplot(data = temp.ccfdf, mapping = aes(x = lag, y = acf)) +
+      geom_hline(aes(yintercept = 0)) +
+      geom_segment(mapping = aes(xend = lag, yend = 0))+
+      geom_hline(aes(yintercept = ciline), linetype = 3, color = 'darkblue') + 
+      geom_hline(aes(yintercept = -ciline), linetype = 3, color = 'darkblue')+
+      labs(title = colnames(env.var[[i]]))+
+      theme_bw() +
+      theme(panel.grid = element_blank(),
+            axis.text.x = element_text(angle = 0, vjust=0.5, size = 8),
+            axis.text.y = element_text(angle = 0, vjust=0.5, size = 8),
+            axis.title= element_text(size=8,face="bold"),
+            title = element_text(angle = 0, vjust=0.5, size = 8, face = 'bold'))
+ 
+  #
+  assign(paste0('ccf.', i), q)
+}
+#crosscorrelation.plots <- mget(ls(pattern = 'ccf.*'))
+crosscorrelation.plots <- mget(c('ccf.1', 'ccf.2', "ccf.3", "ccf.4", "ccf.5", "ccf.6", "ccf.7", "ccf.8", 
+                                 "ccf.9", "ccf.10", "ccf.11", "ccf.12"))
+
+(plot.ccf <- do.call(plot_grid, crosscorrelation.plots))
+#ggsave(filename = "plots/DM_ccf.png", plot = plot.ccf)
+```
+
+- Mean temperature: 0, and 9
+- Maximum temperature: 0
+- Minimum temperature: 0, and 2
+- Precipitation: 0
+- NDVI: 0, 1, 2, 3, and 4
+- NDWI: 0, and 9
+- EVI: 0, 1, 2, 3, 4, and 5
+- Evaporation: 0
+- Land surface temperature: 0
+- Runoff: 0, 1, and 2
+- Surface water volumetric layer: 0, 1, and 2
+
+As Maximum temperature, precipitation, evaporation and land surface temperature only have significant correlation at lag 0 we will only test the other variables to see what is the best lag or combination of consecutive lags to use in the next step.
+
+```{r data management2 DM, warning=F}
+# lagged predictors
+## mean temp
+meanTemp.lags.DM <- ts(cbind(
+  meanTemp.Lag0 = meanTemp.DM,
+  meanTemp.Lag9 = stats::lag(meanTemp.DM, -9)
+), start = 2003, frequency = 12)
+
+meanTemp.lags.DM <- ts(meanTemp.lags.DM[1:132, 1:2], start = 2003, frequency = 12)
+## max temp
+maxTemp.lags.DM <- ts(cbind(
+  maxTemp.Lag0 = maxTemp.DM
+), start = 2003, frequency = 12)
+
+maxTemp.lags.DM <- ts(maxTemp.lags.DM[1:132, 1:1], start = 2003, frequency = 12)
+## min temp
+minTemp.lags.DM <- ts(cbind(
+  minTemp.Lag0 = minTemp.DM,
+  minTemp.Lag2 = stats::lag(minTemp.DM, -2)
+), start = 2003, frequency = 12)
+
+minTemp.lags.DM <- ts(minTemp.lags.DM[1:132, 1:2], start = 2003, frequency = 12)
+## precipitation
+prec.lags.DM <- ts(cbind(
+  prec.Lag0 = prec.DM
+), start = 2003, frequency = 12)
+
+prec.lags.DM <- ts(prec.lags.DM[1:132, 1:1], start = 2003, frequency = 12)
+## ndvi
+ndvi.lags.DM <- ts(cbind(
+  ndvi.Lag0 = ndvi.DM,
+  ndvi.Lag1 = stats::lag(ndvi.DM, -1),
+  ndvi.Lag2 = stats::lag(ndvi.DM, -2),
+  ndvi.Lag3 = stats::lag(ndvi.DM, -3),
+  ndvi.Lag4 = stats::lag(ndvi.DM, -4)
+), start = 2003, frequency = 12)
+
+ndvi.lags.DM <- ts(ndvi.lags.DM[1:132, 1:5], start = 2003, frequency = 12)
+## ndwi
+ndwi.lags.DM <- ts(cbind(
+  ndwi.Lag0 = ndwi.DM,
+  ndwi.Lag9 = stats::lag(ndwi.DM, -9)
+), start = 2003, frequency = 12)
+
+ndwi.lags.DM <- ts(ndwi.lags.DM[1:132, 1:2], start = 2003, frequency = 12)
+## evi
+evi.lags.DM <- ts(cbind(
+  evi.Lag0 = evi.DM,
+  evi.Lag1 = stats::lag(evi.DM, -1),
+  evi.Lag2 = stats::lag(evi.DM, -2),
+  evi.Lag3 = stats::lag(evi.DM, -3),
+  evi.Lag4 = stats::lag(evi.DM, -4),
+  evi.Lag5 = stats::lag(evi.DM, -5)
+), start = 2003, frequency = 12)
+
+evi.lags.DM <- ts(evi.lags.DM[1:132, 1:6], start = 2003, frequency = 12)
+## evaporation
+evp.lags.DM <- ts(cbind(
+  evp.Lag0 = evp.DM
+), start = 2003, frequency = 12)
+
+evp.lags.DM <- ts(evp.lags.DM[1:132, 1:1], start = 2003, frequency = 12)
+## lst
+lst.lags.DM <- ts(cbind(
+  lst.Lag0 = lst.DM
+), start = 2003, frequency = 12)
+
+lst.lags.DM <- ts(lst.lags.DM[1:132, 1:1], start = 2003, frequency = 12)
+## runoff
+runoff.lags.DM <- ts(cbind(
+  runoff.Lag0 = runoff.DM,
+  runoff.Lag1 = stats::lag(runoff.DM, -1),
+  runoff.Lag2 = stats::lag(runoff.DM, -2)
+), start = 2003, frequency = 12)
+
+runoff.lags.DM <- ts(runoff.lags.DM[1:132, 1:3], start = 2003, frequency = 12)
+## swvl1
+swvl1.lags.DM <- ts(cbind(
+  swvl1.Lag0 = swvl1.DM,
+  swvl1.Lag1 = stats::lag(swvl1.DM, -1),
+  swvl1.Lag2 = stats::lag(swvl1.DM, -2)
+), start = 2003, frequency = 12)
+
+swvl1.lags.DM <- ts(swvl1.lags.DM[1:132, 1:3], start = 2003, frequency = 12)
+
+```
+
+#### Mean temperature 
+
+Mean temperature with 9 months lag was the model with the lowest MAE, meaning that we will use mean temperature with 9 months of lag in our next models.
+
+```{r lagged mean temperature DM, warning=F}
+meanTemp.df.DM <- arima.xreg.12step.lagvars(ts.DM, meanTemp.lags.DM, 0,0,2,0,1,1)
+variables <- c("SARIMA", "meanTemp", "meanTemp 2 lags")
+for (i in 1:length(variables)) {
+  meanTemp.df.DM[[2]][i, 'variable']<- variables[i]
+}
+meanTemp.df.DM2 <- arima.xreg.12step.separateLags(ts.DM, meanTemp.lags.DM, 0,0,2,0,1,1)
+variables <- c("SARIMA", "meanTemp", "meanTemp.Lag9")
+for (i in 1:length(variables)) {
+  meanTemp.df.DM2[[2]][i, 'variable']<- variables[i]
+}
+meanTemp.df.DM3 <- rbind(meanTemp.df.DM[[2]], meanTemp.df.DM2[[2]])
+meanTemp.df.DM3 <- meanTemp.df.DM3[!duplicated(meanTemp.df.DM3),]
+meanTemp.df.DM3
+```
+
+#### Min temperature 
+
+Minimum temperature with no lag was the best model, we will use this variable for our next models.
+
+```{r lagged min temperature DM, warning=F}
+minTemp.df.DM <- arima.xreg.12step.lagvars(ts.DM, minTemp.lags.DM, 0,0,2,0,1,1)
+variables <- c("SARIMA", "minTemp", "minTemp 2 lags")
+for (i in 1:length(variables)) {
+  minTemp.df.DM[[2]][i, 'variable']<- variables[i]
+}
+minTemp.df.DM2 <- arima.xreg.12step.separateLags(ts.DM, minTemp.lags.DM, 0,0,2,0,1,1)
+variables <- c("SARIMA", "minTemp", "minTemp.Lag2")
+for (i in 1:length(variables)) {
+  minTemp.df.DM2[[2]][i, 'variable']<- variables[i]
+}
+minTemp.df.DM3 <- rbind(minTemp.df.DM[[2]], minTemp.df.DM2[[2]])
+minTemp.df.DM3 <- minTemp.df.DM3[!duplicated(minTemp.df.DM3),]
+minTemp.df.DM3
+```
+
+#### NDVI 
+
+NDVI with 4 months of lag was the best model, we will use this variable for our next models.
+
+```{r lagged ndvi DM, warning=F}
+ndvi.df.DM <- arima.xreg.12step.lagvars(ts.DM, ndvi.lags.DM, 0,0,2,0,1,1)
+variables <- c("SARIMA", "ndvi", "ndvi 2 lags", "ndvi 3 lags", "ndvi 4 lags", "ndvi 5 lags")
+for (i in 1:length(variables)) {
+  ndvi.df.DM[[2]][i, 'variable']<- variables[i]
+}
+ndvi.df.DM2 <- arima.xreg.12step.separateLags(ts.DM, ndvi.lags.DM, 0,0,2,0,1,1)
+variables <- c("SARIMA", "ndvi", "ndvi.Lag1", "ndvi.Lag2", "ndvi.Lag3", "ndvi.Lag4")
+for (i in 1:length(variables)) {
+  ndvi.df.DM2[[2]][i, 'variable']<- variables[i]
+}
+ndvi.df.DM3 <- rbind(ndvi.df.DM[[2]], ndvi.df.DM2[[2]])
+ndvi.df.DM3 <- ndvi.df.DM3[!duplicated(ndvi.df.DM3),]
+ndvi.df.DM3
+```
+
+#### NDWI 
+
+NDWI with 2 consecutive lags was the best model, we will use this variable for our next models.
+
+```{r lagged ndwi DM, warning=F}
+ndwi.df.DM <- arima.xreg.12step.lagvars(ts.DM, ndwi.lags.DM, 0,0,2,0,1,1)
+variables <- c("SARIMA", "ndwi", "ndwi 2 lags")
+for (i in 1:length(variables)) {
+  ndwi.df.DM[[2]][i, 'variable']<- variables[i]
+}
+ndwi.df.DM2 <- arima.xreg.12step.separateLags(ts.DM, ndwi.lags.DM, 0,0,2,0,1,1)
+variables <- c("SARIMA", "ndwi", "ndwi.Lag9")
+for (i in 1:length(variables)) {
+  ndwi.df.DM2[[2]][i, 'variable']<- variables[i]
+}
+ndwi.df.DM3 <- rbind(ndwi.df.DM[[2]], ndwi.df.DM2[[2]])
+ndwi.df.DM3 <- ndwi.df.DM3[!duplicated(ndwi.df.DM3),]
+ndwi.df.DM3
+```
+
+#### EVI 
+
+EVI with 0 months of lag was the best model, we will use this variable for our next models.
+
+```{r lagged EVI DM, warning=F}
+evi.df.DM <- arima.xreg.12step.lagvars(ts.DM, evi.lags.DM, 0,0,2,0,1,1)
+variables <- c("SARIMA", "evi", "evi 2 lags", "evi 3 lags", "evi 4 lags", "evi 5 lags", "evi 6 lags")
+for (i in 1:length(variables)) {
+  evi.df.DM[[2]][i, 'variable']<- variables[i]
+}
+evi.df.DM2 <- arima.xreg.12step.separateLags(ts.DM, evi.lags.DM, 0,0,2,0,1,1)
+variables <- c("SARIMA", "evi", "evi.Lag1", "evi.Lag2", "evi.Lag3", "evi.Lag4", "evi.Lag5")
+for (i in 1:length(variables)) {
+  evi.df.DM2[[2]][i, 'variable']<- variables[i]
+}
+evi.df.DM3 <- rbind(evi.df.DM[[2]], evi.df.DM2[[2]])
+evi.df.DM3 <- evi.df.DM3[!duplicated(evi.df.DM3),]
+evi.df.DM3
+```
+
+#### Runoff 
+
+Runoff with 1 month of lag was the best model, we will use this variable for our next models.
+
+```{r lagged runoff DM, warning=F}
+runoff.df.DM <- arima.xreg.12step.lagvars(ts.DM, runoff.lags.DM, 0,0,2,0,1,1)
+variables <- c("SARIMA", "runoff", "runoff 2 lags", "runoff 3 lags")
+for (i in 1:length(variables)) {
+  runoff.df.DM[[2]][i, 'variable']<- variables[i]
+}
+runoff.df.DM2 <- arima.xreg.12step.separateLags(ts.DM, runoff.lags.DM, 0,0,2,0,1,1)
+variables <- c("SARIMA", "runoff", "runoff.Lag1", "runoff.Lag2")
+for (i in 1:length(variables)) {
+  runoff.df.DM2[[2]][i, 'variable']<- variables[i]
+}
+runoff.df.DM3 <- rbind(runoff.df.DM[[2]], runoff.df.DM2[[2]])
+runoff.df.DM3 <- runoff.df.DM3[!duplicated(runoff.df.DM3),]
+runoff.df.DM3
+```
+
+#### Surface water volumetric layer 1 
+
+Surface water volumetric layer with 3 consecutive lags was the model with the lowest MAE, meaning that we will use this variable with 0, 1 and 2 months of lag together in our next models.
+
+```{r lagged swvl1 DM, warning=F}
+swvl1.df.DM <- arima.xreg.12step.lagvars(ts.DM, swvl1.lags.DM, 0,0,2,0,1,1)
+variables <- c("SARIMA", "swvl1", "swvl1 2 lags", "swvl1 3 lags")
+for (i in 1:length(variables)) {
+  swvl1.df.DM[[2]][i, 'variable']<- variables[i]
+}
+swvl1.df.DM2 <- arima.xreg.12step.separateLags(ts.DM, swvl1.lags.DM, 0,0,2,0,1,1)
+variables <- c("SARIMA", "swvl1", "swvl1.Lag1", "swvl1.Lag2")
+for (i in 1:length(variables)) {
+  swvl1.df.DM2[[2]][i, 'variable']<- variables[i]
+}
+swvl1.df.DM3 <- rbind(swvl1.df.DM[[2]], swvl1.df.DM2[[2]])
+swvl1.df.DM3 <- swvl1.df.DM3[!duplicated(swvl1.df.DM3),]
+swvl1.df.DM3
+```
+
+### Model fitting with external regressors
+
+Now we will compare our final variables and pick the first to include in our final model.
+
+#### each parameter 
+
+```{r data management3 DM, warning=F}
+parameters.DM <- cbind(
+  ts = ts.DM,
+  meanTemp.Lag9 = stats::lag(meanTemp.DM, -9),
+  maxTemp.Lag0 = maxTemp.DM,
+  minTemp.Lag0 = minTemp.DM,
+  prec.Lag0 = prec.DM,
+  ndvi.Lag4 = stats::lag(ndvi.DM, -4),
+  ndwi.Lag0 = ndwi.DM, 
+  ndwi.Lag9 = stats::lag(ndwi.DM, -9),
+  evi.Lag0 = evi.DM, 
+  evp.Lag0 = evp.DM,
+  lst.Lag0 = lst.DM,
+  runoff.Lag1 = stats::lag(runoff.DM, -1),
+  swvl1.Lag0 = swvl1.DM,
+  swvl1.Lag1 = stats::lag(swvl1.DM, -1),
+  swvl1.Lag2 = stats::lag(swvl1.DM, -2)
+)
+
+parameters.DM <- ts(parameters.DM[1:132, 1:15], start = 2003, frequency = 12)
+```
+
+
+NDVI has the lowest MAE with 0.2667339, we will use this combination for our next iteration.
+
+```{r each parameter DM, warning=F}
+variables <- c("meanTemp.", "maxTemp.", "minTemp.", "prec.", "ndvi.", "ndwi.", "evi.", "evp.", "lst.", "runoff.", "swvl1.")
+eachparameter.DM <-arima.xreg.12step(parameters.DM, variables, 0,0,2,0,1,1)
+variables <- c("SARIMA", "meanTemp.", "maxTemp.", "minTemp.", "prec.", "ndvi.", "ndwi.", "evi.", "evp.", "lst.", "runoff.", "swvl1.")
+for (i in 1:length(variables)) {
+  eachparameter.DM[[2]][i, 'variable']<- variables[i]
+}
+eachparameter.DM[[2]]
+
+(g <- ggplot()+ 
+  geom_line(aes(1:12, eachparameter.DM[[1]][1,], colour = 'SARIMA')) + 
+  geom_line(aes(1:12, eachparameter.DM[[1]][6,], colour = 'NDVI')) +
+  labs(x = 'Horizonte', y = 'MAE', colour = 'Modelo')+
+  scale_x_continuous(breaks = 1:12)+
+  theme(legend.position = "bottom",
+        legend.box.background = element_rect(),
+        legend.text = element_text(size = 10)
+        ))
+#ggsave(filename = "plots/DM_step0.png", plot = g)
+```
+
+#### NDVI
+
+The addition of NDWI to our model that already has NDVI as external regressor has the lowest MAE with 0.2648656, we will use this combination for our next iteration.
+
+```{r step 1 DM, warning=F}
+variables <- c("meanTemp.", "maxTemp.", "minTemp.", "prec.", "ndvi.", "ndwi.", "evi.", "evp.", "lst.", "runoff.", "swvl1.")
+keep <- c("ndvi.")
+model.ndvi.DM <- arima.xreg.12step.keep(parameters.DM, variables, keep, 0,0,2,0,1,1)
+names <- c("SARIMA", "+meanTemp.", "+maxTemp.", "+minTemp.", "+prec.", "+ndwi.", "+evi+", "+evp.", "+lst.", "+runoff.", "+swvl1.")
+for (i in 1:length(names)) {
+  model.ndvi.DM[[2]][i, 'variable']<- names[i]
+}
+model.ndvi.DM[[2]]
+
+(g <- ggplot()+ 
+  geom_line(aes(1:12, model.ndvi.DM[[1]][1,], colour = 'SARIMA')) + 
+  geom_line(aes(1:12, eachparameter.DM[[1]][6,], colour = 'NDVI')) +
+  geom_line(aes(1:12, model.ndvi.DM[[1]][6,], colour = 'NDVI+NDWI')) +
+  labs(x = 'Horizonte', y = 'MAE', colour = 'Modelo')+
+  scale_x_continuous(breaks = 1:12)+
+  theme(legend.position = "bottom",
+        legend.box.background = element_rect(),
+        legend.text = element_text(size = 10)
+        ))
+#ggsave(filename = "plots/DM_step1.png", plot = g)
+```
+
+#### NDVI + NDWI
+
+The addition of EVI to our NDVI + NDWI model has the lowest MAE with 0.2600440, we will include this variable for our next iteration.
+
+```{r step2 DM, warning=F}
+variables <- c("meanTemp.", "maxTemp.", "minTemp.", "prec.", "ndvi.", "ndwi.", "evi.", "evp.", "lst.", "runoff.", "swvl1.")
+keep <- c("ndvi.", "ndwi.")
+model.ndvi.ndwi.DM <- arima.xreg.12step.keep(parameters.DM, variables, keep, 0,0,2,0,1,1)
+names <- c("SARIMA", "+meanTemp.", "+maxTemp.", "+minTemp.", "+prec.", "+evi+", "+evp.", "+lst.", "+runoff.", "+swvl1.")
+for (i in 1:length(names)) {
+  model.ndvi.ndwi.DM[[2]][i, 'variable']<- names[i]
+}
+model.ndvi.ndwi.DM[[2]]
+
+(g <- ggplot()+ 
+  geom_line(aes(1:12, model.ndvi.ndwi.DM[[1]][1,], colour = 'SARIMA')) + 
+  geom_line(aes(1:12, model.ndvi.DM[[1]][6,], colour = 'NDVI+NDWI')) +
+  geom_line(aes(1:12, model.ndvi.ndwi.DM[[1]][6,], colour = 'NDVI+NDWI+EVI')) +
+  labs(x = 'Horizonte', y = 'MAE', colour = 'Modelo')+
+  scale_x_continuous(breaks = 1:12)+
+  theme(legend.position = "bottom",
+        legend.box.background = element_rect(),
+        legend.text = element_text(size = 10)
+        ))
+#ggsave(filename = "plots/DM_step2.png", plot = g)
+```
+
+#### NDVI + NDWI + EVI
+
+The addition LST to our NDVI + NDWI + EVI model has the lowest MAE with 0.2581900, we will include this variable for our next iteration.
+
+```{r step 3 DM, warning=F}
+variables <- c("meanTemp.", "maxTemp.", "minTemp.", "prec.", "ndvi.", "ndwi.", "evi.", "evp.", "lst.", "runoff.", "swvl1.")
+keep <- c("ndvi.", "ndwi.", "evi.")
+model.ndvi.ndwi.evi.DM <- arima.xreg.12step.keep(parameters.DM, variables, keep, 0,0,2,0,1,1)
+names <- c("SARIMA", "+meanTemp.", "+maxTemp.", "+minTemp.", "+prec.", "+evp.", "+lst.", "+runoff.", "+swvl1.")
+for (i in 1:length(names)) {
+  model.ndvi.ndwi.evi.DM[[2]][i, 'variable']<- names[i]
+}
+model.ndvi.ndwi.evi.DM[[2]]
+
+(g <- ggplot()+ 
+  geom_line(aes(1:12, model.ndvi.ndwi.evi.DM[[1]][1,], colour = 'SARIMA')) + 
+  geom_line(aes(1:12, model.ndvi.ndwi.DM[[1]][6,], colour = 'NDVI+NDWI+EVI')) +
+  geom_line(aes(1:12, model.ndvi.ndwi.evi.DM[[1]][7,], colour = 'NDVI+NDWI+EVI+LST')) +
+  labs(x = 'Horizonte', y = 'MAE', colour = 'Modelo')+
+  scale_x_continuous(breaks = 1:12)+
+  theme(legend.position = "bottom",
+        legend.box.background = element_rect(),
+        legend.text = element_text(size = 10)
+        ))
+#ggsave(filename = "plots/DM_step3.png", plot = g)
+```
+
+#### NDVI + NDWI + EVI + LST
+
+The addition of mean temperature to our NDVI + NDWI + EVI + LST model has the lowest MAE with 0.2572602, we will include this variable for our next iteration.
+
+```{r step 4 DM, warning=F}
+variables <- c("meanTemp.", "maxTemp.", "minTemp.", "prec.", "ndvi.", "ndwi.", "evi.", "evp.", "lst.", "runoff.", "swvl1.")
+keep <- c("ndvi.", "ndwi.", "evi.", "lst.")
+model.ndvi.ndwi.evi.lst.DM <- arima.xreg.12step.keep(parameters.DM, variables, keep, 0,0,2,0,1,1)
+names <- c("SARIMA", "+meanTemp.", "+maxTemp.", "+minTemp.", "+prec.", "+evp.", "+runoff.", "+swvl1.")
+for (i in 1:length(names)) {
+  model.ndvi.ndwi.evi.lst.DM[[2]][i, 'variable']<- names[i]
+}
+model.ndvi.ndwi.evi.lst.DM[[2]]
+
+(g <- ggplot()+ 
+  geom_line(aes(1:12, model.ndvi.ndwi.evi.lst.DM[[1]][1,], colour = 'SARIMA')) + 
+  geom_line(aes(1:12, model.ndvi.ndwi.evi.DM[[1]][7,], colour = 'NDVI+NDWI+EVI+LST')) +
+  geom_line(aes(1:12, model.ndvi.ndwi.evi.lst.DM[[1]][2,], colour = 'NDVI+NDWI+EVI+LST+MeanTemp')) +
+  labs(x = 'Horizonte', y = 'MAE', colour = 'Modelo')+
+  scale_x_continuous(breaks = 1:12)+
+  theme(legend.position = "bottom",
+        legend.box.background = element_rect(),
+        legend.text = element_text(size = 10)
+        ))
+#ggsave(filename = "plots/DM_step4.png", plot = g)
+```
+
+#### NDVI + NDWI + EVI + LST + meanTemp
+
+No further improvement to our model was achieved, so our final model will include NDVI, NDWI, EVI, LST and mean temperature as external regressors for the dengue cases.
+
+```{r step 5 DM, warning=F}
+variables <- c("meanTemp.", "maxTemp.", "minTemp.", "prec.", "ndvi.", "ndwi.", "evi.", "evp.", "lst.", "runoff.", "swvl1.")
+keep <- c("ndvi.", "ndwi.", "evi.", "lst.", "meanTemp.")
+model.ndvi.ndwi.evi.lst.meanTemp.DM <- arima.xreg.12step.keep(parameters.DM, variables, keep, 0,0,2,0,1,1)
+names <- c("SARIMA", "+maxTemp.", "+minTemp.", "+prec.", "+evp.", "+runoff.", "+swvl1.")
+for (i in 1:length(names)) {
+  model.ndvi.ndwi.evi.lst.meanTemp.DM[[2]][i, 'variable']<- names[i]
+}
+model.ndvi.ndwi.evi.lst.meanTemp.DM[[2]]
+
+(g <- ggplot()+ 
+  geom_line(aes(1:12, model.ndvi.ndwi.evi.lst.meanTemp.DM[[1]][1,], colour = 'SARIMA')) + 
+  geom_line(aes(1:12, model.ndvi.ndwi.evi.lst.DM[[1]][2,], colour = 'NDVI+NDWI+EVI+LST+MeanTemp')) +
+  labs(x = 'Horizonte', y = 'MAE', colour = 'Modelo')+
+  scale_x_continuous(breaks = 1:12)+
+  theme(legend.position = "bottom",
+        legend.box.background = element_rect(),
+        legend.text = element_text(size = 10)
+        ))
+#ggsave(filename = "plots/DM_step5.png", plot = g)
+```
+
+## Loreto 
+### Environmental variables time series and lagged predictors {.tabset .tabset-fade}
+```{r time series variables LO, warning=F}
+ts.LO = ts(dt[dt$province == "Loreto", c('den1k')], frequency = 12, start = 2003) # TS
+meanTemp.LO = ts(dt[dt$province == "Loreto", c('meanTemperature')], frequency = 12, start = 2003) # TS
+maxTemp.LO = ts(dt[dt$province == "Loreto", c('maxTemperature')], frequency = 12, start = 2003) # TS
+minTemp.LO = ts(dt[dt$province == "Loreto", c('minTemperature')], frequency = 12, start = 2003) # TS
+prec.LO = ts(dt[dt$province == "Loreto", c('precipitation')], frequency = 12, start = 2003) # TS
+ndvi.LO = ts(dt[dt$province == "Loreto", c('NDVI')], frequency = 12, start = 2003) # TS
+ndwi.LO = ts(dt[dt$province == "Loreto", c('NDWI')], frequency = 12, start = 2003) # TS
+evi.LO = ts(dt[dt$province == "Loreto", c('EVI')], frequency = 12, start = 2003) # TS
+et.LO = ts(dt[dt$province == "Loreto", c('ET')], frequency = 12, start = 2003) # TS
+evp.LO = ts(dt[dt$province == "Loreto", c('evp')], frequency = 12, start = 2003) # TS
+lst.LO = ts(dt[dt$province == "Loreto", c('LST')], frequency = 12, start = 2003) # TS
+runoff.LO = ts(dt[dt$province == "Loreto", c('runoff')], frequency = 12, start = 2003) # TS
+swvl1.LO = ts(dt[dt$province == "Loreto", c('swvl1')], frequency = 12, start = 2003) # TS
+```
+
+```{r cross correlation LO, warning=F, fig.align = "center"}
+
+env.var <- list(meanTemp.LO, maxTemp.LO, minTemp.LO, prec.LO, ndvi.LO, ndwi.LO, evi.LO, et.LO, evp.LO, lst.LO, 
+            runoff.LO, swvl1.LO)
+for (i in 1:length(env.var)) { # iterate between environmental factors
+  
+  # ccf and pacf plots
+  temp.ccf <- ccf(as.numeric(env.var[[i]]), as.numeric(ts.LO), type = "correlation", plot = FALSE) # ccf
+  temp.ccfdf <- with(temp.ccf, data.frame(lag, acf)) # get df from ccf to plot it with ggplot
+  conf.level <- 0.95 # confidence level
+  ciline <- qnorm((1 - conf.level)/2)/sqrt(length(ts.LO)) # confidence lines
+  #ccf
+  q <- ggplot(data = temp.ccfdf, mapping = aes(x = lag, y = acf)) +
+      geom_hline(aes(yintercept = 0)) +
+      geom_segment(mapping = aes(xend = lag, yend = 0))+
+      geom_hline(aes(yintercept = ciline), linetype = 3, color = 'darkblue') + 
+      geom_hline(aes(yintercept = -ciline), linetype = 3, color = 'darkblue')+
+      labs(title = colnames(env.var[[i]]))+
+      theme_bw() +
+      theme(panel.grid = element_blank(),
+            axis.text.x = element_text(angle = 0, vjust=0.5, size = 8),
+            axis.text.y = element_text(angle = 0, vjust=0.5, size = 8),
+            axis.title= element_text(size=8,face="bold"),
+            title = element_text(angle = 0, vjust=0.5, size = 8, face = 'bold'))
+ 
+  #
+  assign(paste0('ccf.', i), q)
+}
+#crosscorrelation.plots <- mget(ls(pattern = 'ccf.*'))
+crosscorrelation.plots <- mget(c('ccf.1', 'ccf.2', "ccf.3", "ccf.4", "ccf.5", "ccf.6", "ccf.7", "ccf.8", 
+                                 "ccf.9", "ccf.10", "ccf.11", "ccf.12"))
+
+(plot.ccf <- do.call(plot_grid, crosscorrelation.plots))
+#ggsave(filename = "plots/LO_ccf.png", plot = plot.ccf)
+```
+
+- Mean temperature: 0, 1, 2, and 3
+- Maximum temperature: 0, 1, 2, and 3
+- Minimum temperature: 0, 1, and 2
+- Precipitation: 0, 5, and 6
+- NDVI: 0, 4, 5, and 6
+- NDWI: 0, 5, 6, and 7
+- EVI: 0, 4, and 5
+- Evaporation: 0, 3, and 4
+- Land surface temperature: 0, 3, 4, and 5
+- Runoff: 0, 3, 4, and 5
+- Surface water volumetric layer: 0, 3, 4, 5, and 6
+
+```{r data management2 LO, warning=F}
+
+# lagged predictors
+## mean temp
+meanTemp.lags.LO <- ts(cbind(
+  meanTemp.Lag0 = meanTemp.LO,
+  meanTemp.Lag1 = stats::lag(meanTemp.LO, -1),
+  meanTemp.Lag2 = stats::lag(meanTemp.LO, -2),
+  meanTemp.Lag3 = stats::lag(meanTemp.LO, -3)
+), start = 2003, frequency = 12)
+
+meanTemp.lags.LO <- ts(meanTemp.lags.LO[1:132, 1:4], start = 2003, frequency = 12)
+## max temp
+maxTemp.lags.LO <- ts(cbind(
+  maxTemp.Lag0 = maxTemp.LO,
+  maxTemp.Lag1 = stats::lag(maxTemp.LO, -1),
+  maxTemp.Lag2 = stats::lag(maxTemp.LO, -2),
+  maxTemp.Lag3 = stats::lag(maxTemp.LO, -3)
+), start = 2003, frequency = 12)
+
+maxTemp.lags.LO <- ts(maxTemp.lags.LO[1:132, 1:4], start = 2003, frequency = 12)
+## min temp
+minTemp.lags.LO <- ts(cbind(
+  minTemp.Lag0 = minTemp.LO,
+  minTemp.Lag1 = stats::lag(minTemp.LO, -1),
+  minTemp.Lag2 = stats::lag(minTemp.LO, -2)
+), start = 2003, frequency = 12)
+
+minTemp.lags.LO <- ts(minTemp.lags.LO[1:132, 1:3], start = 2003, frequency = 12)
+## precipitation
+prec.lags.LO <- ts(cbind(
+  prec.Lag0 = prec.LO,
+  prec.Lag5 = stats::lag(prec.LO, -5),
+  prec.Lag6 = stats::lag(prec.LO, -6)
+), start = 2003, frequency = 12)
+
+prec.lags.LO <- ts(prec.lags.LO[1:132, 1:3], start = 2003, frequency = 12)
+## ndvi
+ndvi.lags.LO <- ts(cbind(
+  ndvi.Lag0 = ndvi.LO,
+  ndvi.Lag4 = stats::lag(ndvi.LO, -4),
+  ndvi.Lag5 = stats::lag(ndvi.LO, -5),
+  ndvi.Lag6 = stats::lag(ndvi.LO, -6)
+), start = 2003, frequency = 12)
+
+ndvi.lags.LO <- ts(ndvi.lags.LO[1:132, 1:4], start = 2003, frequency = 12)
+## ndwi
+ndwi.lags.LO <- ts(cbind(
+  ndwi.Lag0 = ndwi.LO,
+  ndwi.Lag5 = stats::lag(ndwi.LO, -5),
+  ndwi.Lag6 = stats::lag(ndwi.LO, -6),
+  ndwi.Lag7 = stats::lag(ndwi.LO, -7)
+), start = 2003, frequency = 12)
+
+ndwi.lags.LO <- ts(ndwi.lags.LO[1:132, 1:4], start = 2003, frequency = 12)
+## evi
+evi.lags.LO <- ts(cbind(
+  evi.Lag0 = evi.LO,
+  evi.Lag4 = stats::lag(evi.LO, -4),
+  evi.Lag5 = stats::lag(evi.LO, -5)
+), start = 2003, frequency = 12)
+
+evi.lags.LO <- ts(evi.lags.LO[1:132, 1:3], start = 2003, frequency = 12)
+## evaporation
+evp.lags.LO <- ts(cbind(
+  evp.Lag0 = evp.LO,
+  evp.Lag3 = stats::lag(evp.LO, -3),
+  evp.Lag4 = stats::lag(evp.LO, -4)
+), start = 2003, frequency = 12)
+
+evp.lags.LO <- ts(evp.lags.LO[1:132, 1:3], start = 2003, frequency = 12)
+## lst
+lst.lags.LO <- ts(cbind(
+  lst.Lag0 = lst.LO,
+  lst.Lag3 = stats::lag(lst.LO, -3),
+  lst.Lag4 = stats::lag(lst.LO, -4),
+  lst.Lag5 = stats::lag(lst.LO, -5)
+), start = 2003, frequency = 12)
+
+lst.lags.LO <- ts(lst.lags.LO[1:132, 1:4], start = 2003, frequency = 12)
+## runoff
+runoff.lags.LO <- ts(cbind(
+  runoff.Lag0 = runoff.LO,
+  runoff.Lag3 = stats::lag(runoff.LO, -3),
+  runoff.Lag4 = stats::lag(runoff.LO, -4),
+  runoff.Lag5 = stats::lag(runoff.LO, -5)
+), start = 2003, frequency = 12)
+
+runoff.lags.LO <- ts(runoff.lags.LO[1:132, 1:4], start = 2003, frequency = 12)
+## swvl1
+swvl1.lags.LO <- ts(cbind(
+  swvl1.Lag0 = swvl1.LO,
+  swvl1.Lag3 = stats::lag(swvl1.LO, -3),
+  swvl1.Lag4 = stats::lag(swvl1.LO, -4),
+  swvl1.Lag5 = stats::lag(swvl1.LO, -5),
+  swvl1.Lag6 = stats::lag(swvl1.LO, -6)
+), start = 2003, frequency = 12)
+
+swvl1.lags.LO <- ts(swvl1.lags.LO[1:132, 1:5], start = 2003, frequency = 12)
+
+```
+
+#### Mean temperature 
+
+Mean temperature with 0 months of lag was the best model, we will use this variable for our next models.
+
+```{r lagged mean temperature LO, warning=F}
+meanTemp.df.LO <- arima.xreg.12step.lagvars(ts.LO, meanTemp.lags.LO, 0,0,1,0,1,1)
+variables <- c("SARIMA", "meanTemp", "meanTemp 2 lags", "meanTemp 3 lags", "meanTemp 4 lags")
+for (i in 1:length(variables)) {
+  meanTemp.df.LO[[2]][i, 'variable']<- variables[i]
+}
+meanTemp.df.LO2 <- arima.xreg.12step.separateLags(ts.LO, meanTemp.lags.LO, 0,0,1,0,1,1)
+variables <- c("SARIMA", "meanTemp", "meanTemp.Lag1", "meanTemp.Lag2", "meanTemp.Lag3")
+for (i in 1:length(variables)) {
+  meanTemp.df.LO2[[2]][i, 'variable']<- variables[i]
+}
+meanTemp.df.LO3 <- rbind(meanTemp.df.LO[[2]], meanTemp.df.LO2[[2]])
+meanTemp.df.LO3 <- meanTemp.df.LO3[!duplicated(meanTemp.df.LO3),]
+meanTemp.df.LO3
+```
+
+#### Max temperature 
+
+Maximum temperature with 0 months of lag was the best model, we will use this variable for our next models.
+
+```{r lagged max temperature LO, warning=F}
+maxTemp.df.LO <- arima.xreg.12step.lagvars(ts.LO, maxTemp.lags.LO, 0,0,1,0,1,1)
+variables <- c("SARIMA", "maxTemp", "maxTemp 2 lags", "maxTemp 3 lags", "maxTemp 4 lags")
+for (i in 1:length(variables)) {
+  maxTemp.df.LO[[2]][i, 'variable']<- variables[i]
+}
+maxTemp.df.LO2 <- arima.xreg.12step.separateLags(ts.LO, maxTemp.lags.LO, 0,0,1,0,1,1)
+variables <- c("SARIMA", "maxTemp", "maxTemp.Lag1", "maxTemp.Lag2", "maxTemp.Lag3")
+for (i in 1:length(variables)) {
+  maxTemp.df.LO2[[2]][i, 'variable']<- variables[i]
+}
+maxTemp.df.LO3 <- rbind(maxTemp.df.LO[[2]], maxTemp.df.LO2[[2]])
+maxTemp.df.LO3 <- maxTemp.df.LO3[!duplicated(maxTemp.df.LO3),]
+maxTemp.df.LO3
+```
+
+#### Min temperature 
+
+Minimum temperature with 0 months of lag was the best model, we will use this variable for our next models.
+
+```{r lagged min temperature LO, warning=F}
+minTemp.df.LO <- arima.xreg.12step.lagvars(ts.LO, minTemp.lags.LO, 0,0,1,0,1,1)
+variables <- c("SARIMA", "minTemp", "minTemp 2 lags", "minTemp 3 lags")
+for (i in 1:length(variables)) {
+  minTemp.df.LO[[2]][i, 'variable']<- variables[i]
+}
+minTemp.df.LO2 <- arima.xreg.12step.separateLags(ts.LO, minTemp.lags.LO, 0,0,1,0,1,1)
+variables <- c("SARIMA", "minTemp", "minTemp.Lag1", "minTemp.Lag2")
+for (i in 1:length(variables)) {
+  minTemp.df.LO2[[2]][i, 'variable']<- variables[i]
+}
+minTemp.df.LO3 <- rbind(minTemp.df.LO[[2]], minTemp.df.LO2[[2]])
+minTemp.df.LO3 <- minTemp.df.LO3[!duplicated(minTemp.df.LO3),]
+minTemp.df.LO3
+```
+
+#### Precipitation 
+
+Precipitation with 0 months of lag was the best model, we will use this variable for our next models.
+
+```{r lagged precipitation LO, warning=F}
+prec.df.LO <- arima.xreg.12step.lagvars(ts.LO, prec.lags.LO, 0,0,1,0,1,1)
+variables <- c("SARIMA", "prec", "prec 2 lags", "prec 3 lags")
+for (i in 1:length(variables)) {
+  prec.df.LO[[2]][i, 'variable']<- variables[i]
+}
+prec.df.LO2 <- arima.xreg.12step.separateLags(ts.LO, prec.lags.LO, 0,0,1,0,1,1)
+variables <- c("SARIMA", "prec", "prec.Lag5", "prec.Lag6")
+for (i in 1:length(variables)) {
+  prec.df.LO2[[2]][i, 'variable']<- variables[i]
+}
+prec.df.LO3 <- rbind(prec.df.LO[[2]], prec.df.LO2[[2]])
+prec.df.LO3 <- prec.df.LO3[!duplicated(prec.df.LO3),]
+prec.df.LO3
+```
+
+#### NDVI 
+
+NDVI with 0 months of lag was the best model, we will use this variable for our next models.
+
+```{r lagged NDVI LO, warning=F}
+ndvi.df.LO <- arima.xreg.12step.lagvars(ts.LO, ndvi.lags.LO, 0,0,1,0,1,1)
+variables <- c("SARIMA", "ndvi", "ndvi 2 lags", "ndvi 3 lags", "ndvi 4 lags")
+for (i in 1:length(variables)) {
+  ndvi.df.LO[[2]][i, 'variable']<- variables[i]
+}
+ndvi.df.LO2 <- arima.xreg.12step.separateLags(ts.LO, ndvi.lags.LO, 0,0,1,0,1,1)
+variables <- c("SARIMA", "ndvi", "ndvi.Lag4", "ndvi.Lag5", "ndvi.Lag6")
+for (i in 1:length(variables)) {
+  ndvi.df.LO2[[2]][i, 'variable']<- variables[i]
+}
+ndvi.df.LO3 <- rbind(ndvi.df.LO[[2]], ndvi.df.LO2[[2]])
+ndvi.df.LO3 <- ndvi.df.LO3[!duplicated(ndvi.df.LO3),]
+ndvi.df.LO3
+```
+
+#### NDWI 
+
+NDWI with 0 months of lag was the best model, we will use this variable for our next models.
+
+```{r lagged NDWI LO, warning=F}
+ndwi.df.LO <- arima.xreg.12step.lagvars(ts.LO, ndwi.lags.LO, 0,0,1,0,1,1)
+variables <- c("SARIMA", "ndwi", "ndwi 2 lags", "ndwi 3 lags", "ndwi 4 lags")
+for (i in 1:length(variables)) {
+  ndwi.df.LO[[2]][i, 'variable']<- variables[i]
+}
+ndwi.df.LO2 <- arima.xreg.12step.separateLags(ts.LO, ndwi.lags.LO, 0,0,1,0,1,1)
+variables <- c("SARIMA", "ndwi", "ndwi.Lag5", "ndwi.Lag6", "ndwi.Lag7")
+for (i in 1:length(variables)) {
+  ndwi.df.LO2[[2]][i, 'variable']<- variables[i]
+}
+ndwi.df.LO3 <- rbind(ndwi.df.LO[[2]], ndwi.df.LO2[[2]])
+ndwi.df.LO3 <- ndwi.df.LO3[!duplicated(ndwi.df.LO3),]
+ndwi.df.LO3
+```
+
+#### EVI 
+
+EVI with 0 months of lag was the best model, we will use this variable for our next models.
+
+```{r lagged EVI LO, warning=F}
+evi.df.LO <- arima.xreg.12step.lagvars(ts.LO, evi.lags.LO, 0,0,1,0,1,1)
+variables <- c("SARIMA", "evi", "evi 2 lags", "evi 3 lags")
+for (i in 1:length(variables)) {
+  evi.df.LO[[2]][i, 'variable']<- variables[i]
+}
+evi.df.LO2 <- arima.xreg.12step.separateLags(ts.LO, evi.lags.LO, 0,0,1,0,1,1)
+variables <- c("SARIMA", "evi", "evi.Lag4", "evi.Lag5")
+for (i in 1:length(variables)) {
+  evi.df.LO2[[2]][i, 'variable']<- variables[i]
+}
+evi.df.LO3 <- rbind(evi.df.LO[[2]], evi.df.LO2[[2]])
+evi.df.LO3 <- evi.df.LO3[!duplicated(evi.df.LO3),]
+evi.df.LO3
+```
+
+#### Evaporation 
+
+Evaporation with 3 months of lag was the best model, we will use this variable for our next models.
+
+```{r lagged Evaporation LO, warning=F}
+evp.df.LO <- arima.xreg.12step.lagvars(ts.LO, evp.lags.LO, 0,0,1,0,1,1)
+variables <- c("SARIMA", "evp", "evp 2 lags", "evp 3 lags")
+for (i in 1:length(variables)) {
+  evp.df.LO[[2]][i, 'variable']<- variables[i]
+}
+evp.df.LO2 <- arima.xreg.12step.separateLags(ts.LO, evp.lags.LO, 0,0,1,0,1,1)
+variables <- c("SARIMA", "evp", "evp.Lag3", "evp.Lag4")
+for (i in 1:length(variables)) {
+  evp.df.LO2[[2]][i, 'variable']<- variables[i]
+}
+evp.df.LO3 <- rbind(evp.df.LO[[2]], evp.df.LO2[[2]])
+evp.df.LO3 <- evp.df.LO3[!duplicated(evp.df.LO3),]
+evp.df.LO3
+```
+
+#### Land surface temperature 
+
+Land surface temperature with 3 months of lag was the best model, we will use this variable for our next models.
+
+```{r lagged Land surface temperature LO, warning=F}
+lst.df.LO <- arima.xreg.12step.lagvars(ts.LO, lst.lags.LO, 0,0,1,0,1,1)
+variables <- c("SARIMA", "lst", "lst 2 lags", "lst 3 lags", "lst 4 lags")
+for (i in 1:length(variables)) {
+  lst.df.LO[[2]][i, 'variable']<- variables[i]
+}
+lst.df.LO2 <- arima.xreg.12step.separateLags(ts.LO, lst.lags.LO, 0,0,1,0,1,1)
+variables <- c("SARIMA", "lst", "lst.Lag3", "lst.Lag4", "lst.Lag5")
+for (i in 1:length(variables)) {
+  lst.df.LO2[[2]][i, 'variable']<- variables[i]
+}
+lst.df.LO3 <- rbind(lst.df.LO[[2]], lst.df.LO2[[2]])
+lst.df.LO3 <- lst.df.LO3[!duplicated(lst.df.LO3),]
+lst.df.LO3
+```
+
+#### Runoff 
+
+Runoff with 0 months of lag was the best model, we will use this variable for our next models.
+
+```{r Runoff LO, warning=F}
+runoff.df.LO <- arima.xreg.12step.lagvars(ts.LO, runoff.lags.LO, 0,0,1,0,1,1)
+variables <- c("SARIMA", "runoff", "runoff 2 lags", "runoff 3 lags", "runoff 4 lags")
+for (i in 1:length(variables)) {
+  runoff.df.LO[[2]][i, 'variable']<- variables[i]
+}
+runoff.df.LO2 <- arima.xreg.12step.separateLags(ts.LO, runoff.lags.LO, 0,0,1,0,1,1)
+variables <- c("SARIMA", "runoff", "runoff.Lag3", "runoff.Lag4", "runoff.Lag5")
+for (i in 1:length(variables)) {
+  runoff.df.LO2[[2]][i, 'variable']<- variables[i]
+}
+runoff.df.LO3 <- rbind(runoff.df.LO[[2]], runoff.df.LO2[[2]])
+runoff.df.LO3 <- runoff.df.LO3[!duplicated(runoff.df.LO3),]
+runoff.df.LO3
+```
+
+#### SWVL1 
+
+Surface water volumetric layer with 6 months of lag was the best model, we will use this variable for our next models.
+
+```{r SWVL1 LO, warning=F}
+swvl1.df.LO <- arima.xreg.12step.lagvars(ts.LO, swvl1.lags.LO, 0,0,1,0,1,1)
+variables <- c("SARIMA", "swvl1", "swvl1 2 lags", "swvl1 3 lags", "swvl1 4 lags", "swvl1 5 lags")
+for (i in 1:length(variables)) {
+  swvl1.df.LO[[2]][i, 'variable']<- variables[i]
+}
+swvl1.df.LO2 <- arima.xreg.12step.separateLags(ts.LO, swvl1.lags.LO, 0,0,1,0,1,1)
+variables <- c("SARIMA", "swvl1", "swvl1.Lag3", "swvl1.Lag4", "swvl1.Lag5", "swvl1.Lag6")
+for (i in 1:length(variables)) {
+  swvl1.df.LO2[[2]][i, 'variable']<- variables[i]
+}
+swvl1.df.LO3 <- rbind(swvl1.df.LO[[2]], swvl1.df.LO2[[2]])
+swvl1.df.LO3 <- swvl1.df.LO3[!duplicated(swvl1.df.LO3),]
+swvl1.df.LO3
+```
+### Model fitting with external regressors
+
+Now we will compare our final variables and pick the first to include in our final model.
+
+#### each parameter
+
+```{r data management3 LO, warning=F}
+parameters.LO <- cbind(
+  ts = ts.LO,
+  meanTemp.Lag0 = meanTemp.LO,
+  maxTemp.Lag0 = maxTemp.LO, 
+  minTemp.Lag0 = minTemp.LO, 
+  prec.Lag0 = prec.LO, 
+  ndvi.Lag0 = ndvi.LO,
+  ndwi.Lag0 = ndwi.LO,
+  evi.Lag0 = evi.LO,
+  evp.Lag3 = stats::lag(evp.LO, -3),
+  lst.Lag3 = stats::lag(lst.LO, -3),
+  runoff.Lag0 = runoff.LO, 
+  swvl1.Lag6 = stats::lag(swvl1.LO, -6)
+)
+
+parameters.LO <- ts(parameters.LO[1:132, 1:12], start = 2003, frequency = 12)
+```
+
+LST has the lowest MAE with 0.1097725, we will use this combination for our next iteration.
+
+```{r each parameter LO, warning=F}
+variables <- c("meanTemp.", "maxTemp.", "minTemp.", "prec.", "ndvi.", "ndwi.", "evi.", "evp.", "lst.", "runoff.", "swvl1.")
+eachparameter.LO <-arima.xreg.12step(parameters.LO, variables, 0,0,1,0,1,1)
+variables <- c("SARIMA", "meanTemp.", "maxTemp.", "minTemp.", "prec.", "ndvi.", "ndwi.", "evi.", "evp.", "lst.", "runoff.", "swvl1.")
+for (i in 1:length(variables)) {
+  eachparameter.LO[[2]][i, 'variable']<- variables[i]
+}
+eachparameter.LO[[2]]
+
+(g <- ggplot()+ 
+  geom_line(aes(1:12, eachparameter.LO[[1]][1,], colour = 'SARIMA')) + 
+  geom_line(aes(1:12, eachparameter.LO[[1]][10,], colour = 'LST')) +
+  labs(x = 'Horizonte', y = 'MAE', colour = 'Modelo')+
+  scale_x_continuous(breaks = 1:12)+
+  theme(legend.position = "bottom",
+        legend.box.background = element_rect(),
+        legend.text = element_text(size = 10)
+        ))
+#ggsave(filename = "plots/LO_step0.png", plot = g)
+```
+
+#### LST
+
+The addition of mean temperature to our LST model has the lowest MAE with 0.1064623, we will include this variable for our next iteration.
+
+```{r step 1 LO, warning=F}
+variables <- c("meanTemp.", "maxTemp.", "minTemp.", "prec.", "ndvi.", "ndwi.", "evi.", "evp.", "lst.", "runoff.", "swvl1.")
+keep <- c("lst.")
+model.lst.LO <- arima.xreg.12step.keep(parameters.LO, variables, keep, 0,0,1,0,1,1)
+names <- c("SARIMA", "+meanTemp.", "+maxTemp.", "+minTemp.", "+prec.", "+ndvi.", "+ndwi.", "+evi.", "+evp.", "+runoff.", "+swvl1.")
+for (i in 1:length(names)) {
+  model.lst.LO[[2]][i, 'variable']<- names[i]
+}
+model.lst.LO[[2]]
+
+(g <- ggplot()+ 
+  geom_line(aes(1:12, model.lst.LO[[1]][1,], colour = 'SARIMA')) + 
+  geom_line(aes(1:12, eachparameter.LO[[1]][10,], colour = 'LST')) +
+  geom_line(aes(1:12, model.lst.LO[[1]][2,], colour = 'LST+meanTemp')) +
+  labs(x = 'Horizonte', y = 'MAE', colour = 'Modelo')+
+  scale_x_continuous(breaks = 1:12)+
+  theme(legend.position = "bottom",
+        legend.box.background = element_rect(),
+        legend.text = element_text(size = 10)
+        ))
+#ggsave(filename = "plots/LO_step1.png", plot = g)
+```
+
+#### LST + meanTemp
+
+No further improvement to our model was achieved, so our final model will include LST,  and mean temperature as external regressors for the dengue cases in the province of Loreto.
+
+```{r step 2 LO, warning=F}
+variables <- c("meanTemp.", "maxTemp.", "minTemp.", "prec.", "ndvi.", "ndwi.", "evi.", "evp.", "lst.", "runoff.", "swvl1.")
+keep <- c("lst.", "meanTemp.")
+model.lst.meanTemp.LO <- arima.xreg.12step.keep(parameters.LO, variables, keep, 0,0,1,0,1,1)
+names <- c("SARIMA", "+maxTemp.", "+minTemp.", "+prec.", "+ndvi.", "+ndwi.", "+evi.", "+evp.", "+runoff.", "+swvl1.")
+for (i in 1:length(names)) {
+  model.lst.meanTemp.LO[[2]][i, 'variable']<- names[i]
+}
+model.lst.meanTemp.LO[[2]]
+
+(g <- ggplot()+ 
+  geom_line(aes(1:12, model.lst.meanTemp.LO[[1]][1,], colour = 'SARIMA')) + 
+  geom_line(aes(1:12, model.lst.LO[[1]][2,], colour = 'LST+meanTemp')) +
+  labs(x = 'Horizonte', y = 'MAE', colour = 'Modelo')+
+  scale_x_continuous(breaks = 1:12)+
+  theme(legend.position = "bottom",
+        legend.box.background = element_rect(),
+        legend.text = element_text(size = 10)
+        ))
+#ggsave(filename = "plots/LO_step2.png", plot = g)
+```
+
+## Mariscal Ramon Castilla 
+### Environmental variables time series and lagged predictors {.tabset .tabset-fade}
+```{r time series variables RC, warning=F}
+ts.RC = ts(dt[dt$province == "Mariscal ramon castilla", c('den1k')], frequency = 12, start = 2003) # TS
+meanTemp.RC = ts(dt[dt$province == "Mariscal ramon castilla", c('meanTemperature')], frequency = 12, start = 2003) # TS
+maxTemp.RC = ts(dt[dt$province == "Mariscal ramon castilla", c('maxTemperature')], frequency = 12, start = 2003) # TS
+minTemp.RC = ts(dt[dt$province == "Mariscal ramon castilla", c('minTemperature')], frequency = 12, start = 2003) # TS
+prec.RC = ts(dt[dt$province == "Mariscal ramon castilla", c('precipitation')], frequency = 12, start = 2003) # TS
+ndvi.RC = ts(dt[dt$province == "Mariscal ramon castilla", c('NDVI')], frequency = 12, start = 2003) # TS
+ndwi.RC = ts(dt[dt$province == "Mariscal ramon castilla", c('NDWI')], frequency = 12, start = 2003) # TS
+evi.RC = ts(dt[dt$province == "Mariscal ramon castilla", c('EVI')], frequency = 12, start = 2003) # TS
+et.RC = ts(dt[dt$province == "Mariscal ramon castilla", c('ET')], frequency = 12, start = 2003) # TS
+evp.RC = ts(dt[dt$province == "Mariscal ramon castilla", c('evp')], frequency = 12, start = 2003) # TS
+lst.RC = ts(dt[dt$province == "Mariscal ramon castilla", c('LST')], frequency = 12, start = 2003) # TS
+runoff.RC = ts(dt[dt$province == "Mariscal ramon castilla", c('runoff')], frequency = 12, start = 2003) # TS
+swvl1.RC = ts(dt[dt$province == "Mariscal ramon castilla", c('swvl1')], frequency = 12, start = 2003) # TS
+```
+
+```{r cross correlation RC, warning=F, fig.align = "center"}
+
+env.var <- list(meanTemp.RC, maxTemp.RC, minTemp.RC, prec.RC, ndvi.RC, ndwi.RC, evi.RC, et.RC, evp.RC, lst.RC, 
+            runoff.RC, swvl1.RC)
+for (i in 1:length(env.var)) { # iterate between environmental factors
+  
+  # ccf and pacf plots
+  temp.ccf <- ccf(as.numeric(env.var[[i]]), as.numeric(ts.RC), type = "correlation", plot = FALSE) # ccf
+  temp.ccfdf <- with(temp.ccf, data.frame(lag, acf)) # get df from ccf to plot it with ggplot
+  conf.level <- 0.95 # confidence level
+  ciline <- qnorm((1 - conf.level)/2)/sqrt(length(ts.RC)) # confidence lines
+  #ccf
+  q <- ggplot(data = temp.ccfdf, mapping = aes(x = lag, y = acf)) +
+      geom_hline(aes(yintercept = 0)) +
+      geom_segment(mapping = aes(xend = lag, yend = 0))+
+      geom_hline(aes(yintercept = ciline), linetype = 3, color = 'darkblue') + 
+      geom_hline(aes(yintercept = -ciline), linetype = 3, color = 'darkblue')+
+      labs(title = colnames(env.var[[i]]))+
+      theme_bw() +
+      theme(panel.grid = element_blank(),
+            axis.text.x = element_text(angle = 0, vjust=0.5, size = 8),
+            axis.text.y = element_text(angle = 0, vjust=0.5, size = 8),
+            axis.title= element_text(size=8,face="bold"),
+            title = element_text(angle = 0, vjust=0.5, size = 8, face = 'bold'))
+ 
+  #
+  assign(paste0('ccf.', i), q)
+}
+#crosscorrelation.plots <- mget(ls(pattern = 'ccf.*'))
+crosscorrelation.plots <- mget(c('ccf.1', 'ccf.2', "ccf.3", "ccf.4", "ccf.5", "ccf.6", "ccf.7", "ccf.8", 
+                                 "ccf.9", "ccf.10", "ccf.11", "ccf.12"))
+
+(plot.ccf <- do.call(plot_grid, crosscorrelation.plots))
+#ggsave(filename = "plots/RC_ccf.png", plot = plot.ccf)
+```
+
+- Mean temperature: 0
+- Maximum temperature: 0
+- Minimum temperature: 0
+- Precipitation: 0
+- NDVI: 0
+- NDWI: 0
+- EVI: 0
+- Evaporation: 0
+- Land surface temperature: 0
+- Runoff: 0
+- Surface water volumetric layer: 0, and 5
+
+As Surface water volumetric layer is the only variable with significant correlation at a lag different than 0 we will only test SWVL1 to see what is the best lag or combination of consecutive lags to use in the next step.
+
+```{r data management2 RC, warning=F}
+
+# lagged predictors
+## mean temp
+meanTemp.lags.RC <- ts(cbind(
+  meanTemp.Lag0 = meanTemp.RC
+), start = 2003, frequency = 12)
+
+meanTemp.lags.RC <- ts(meanTemp.lags.RC[1:132, 1:1], start = 2003, frequency = 12)
+## max temp
+maxTemp.lags.RC <- ts(cbind(
+  maxTemp.Lag0 = maxTemp.RC
+), start = 2003, frequency = 12)
+
+maxTemp.lags.RC <- ts(maxTemp.lags.RC[1:132, 1:1], start = 2003, frequency = 12)
+## min temp
+minTemp.lags.RC <- ts(cbind(
+  minTemp.Lag0 = minTemp.RC
+), start = 2003, frequency = 12)
+
+minTemp.lags.RC <- ts(minTemp.lags.RC[1:132, 1:1], start = 2003, frequency = 12)
+## precipitation
+prec.lags.RC <- ts(cbind(
+  prec.Lag0 = prec.RC
+), start = 2003, frequency = 12)
+
+prec.lags.RC <- ts(prec.lags.RC[1:132, 1:1], start = 2003, frequency = 12)
+## ndvi
+ndvi.lags.RC <- ts(cbind(
+  ndvi.Lag0 = ndvi.RC
+), start = 2003, frequency = 12)
+
+ndvi.lags.RC <- ts(ndvi.lags.RC[1:132, 1:1], start = 2003, frequency = 12)
+## ndwi
+ndwi.lags.RC <- ts(cbind(
+  ndwi.Lag0 = ndwi.RC
+), start = 2003, frequency = 12)
+
+ndwi.lags.RC <- ts(ndwi.lags.RC[1:132, 1:1], start = 2003, frequency = 12)
+## evi
+evi.lags.RC <- ts(cbind(
+  evi.Lag0 = evi.RC
+), start = 2003, frequency = 12)
+
+evi.lags.RC <- ts(evi.lags.RC[1:132, 1:1], start = 2003, frequency = 12)
+## evaporation
+evp.lags.RC <- ts(cbind(
+  evp.Lag0 = evp.RC
+), start = 2003, frequency = 12)
+
+evp.lags.RC <- ts(evp.lags.RC[1:132, 1:1], start = 2003, frequency = 12)
+## lst
+lst.lags.RC <- ts(cbind(
+  lst.Lag0 = lst.RC
+), start = 2003, frequency = 12)
+
+lst.lags.RC <- ts(lst.lags.RC[1:132, 1:1], start = 2003, frequency = 12)
+## runoff
+runoff.lags.RC <- ts(cbind(
+  runoff.Lag0 = runoff.RC
+), start = 2003, frequency = 12)
+
+runoff.lags.RC <- ts(runoff.lags.RC[1:132, 1:1], start = 2003, frequency = 12)
+## swvl1
+swvl1.lags.RC <- ts(cbind(
+  swvl1.Lag0 = swvl1.RC,
+  swvl1.Lag5 = stats::lag(swvl1.RC, -5)
+), start = 2003, frequency = 12)
+
+swvl1.lags.RC <- ts(swvl1.lags.RC[1:132, 1:2], start = 2003, frequency = 12)
+
+```
+
+#### SWVL1 
+
+Surface water volumetric layer with 5 months of lag was the best model, we will use this variable for our next models.
+
+```{r SWVL1 RC, warning=F}
+swvl1.df.RC <- arima.xreg.12step.lagvars(ts.RC, swvl1.lags.RC, 0,0,2,0,1,1)
+variables <- c("SARIMA", "swvl1", "swvl1 2 lags")
+for (i in 1:length(variables)) {
+  swvl1.df.RC[[2]][i, 'variable']<- variables[i]
+}
+swvl1.df.RC2 <- arima.xreg.12step.separateLags(ts.RC, swvl1.lags.RC, 0,0,2,0,1,1)
+variables <- c("SARIMA", "swvl1", "swvl1.Lag5")
+for (i in 1:length(variables)) {
+  swvl1.df.RC2[[2]][i, 'variable']<- variables[i]
+}
+swvl1.df.RC3 <- rbind(swvl1.df.RC[[2]], swvl1.df.RC2[[2]])
+swvl1.df.RC3 <- swvl1.df.RC3[!duplicated(swvl1.df.RC3),]
+swvl1.df.RC3
+```
+### Model fitting with external regressors
+
+Now we will compare our final variables and pick the first to include in our final model.
+
+#### each parameter
+
+```{r data management3 RC, warning=F}
+parameters.RC <- cbind(
+  ts = ts.RC,
+  meanTemp.Lag0 = meanTemp.RC, 
+  maxTemp.Lag0 = maxTemp.RC, 
+  minTemp.Lag0 = minTemp.RC, 
+  prec.Lag0 = prec.RC, 
+  ndvi.Lag0 = ndvi.RC,
+  ndwi.Lag0 = ndwi.RC,
+  evi.Lag0 = evi.RC,
+  evp.Lag0 = evp.RC,
+  lst.Lag0 = lst.RC, 
+  runoff.Lag3 = runoff.RC, 
+  swvl1.Lag5 = stats::lag(swvl1.RC, -5)
+)
+
+parameters.RC <- ts(parameters.RC[1:132, 1:12], start = 2003, frequency = 12)
+```
+
+Mean temperature has the lowest MAE with 0.1120582, we will use this combination for our next iteration.
+
+```{r each parameter RC, warning=F}
+variables <- c("meanTemp.", "maxTemp.", "minTemp.", "prec.", "ndvi.", "ndwi.", "evi.", "evp.", "lst.", "runoff.", "swvl1.")
+eachparameter.RC <-arima.xreg.12step(parameters.RC, variables, 0,0,2,0,1,1)
+variables <- c("SARIMA", "meanTemp.", "maxTemp.", "minTemp.", "prec.", "ndvi.", "ndwi.", "evi.", "evp.", "lst.", "runoff.", "swvl1.")
+for (i in 1:length(variables)) {
+  eachparameter.RC[[2]][i, 'variable']<- variables[i]
+}
+eachparameter.RC[[2]]
+
+(g <-ggplot()+ 
+  geom_line(aes(1:12, eachparameter.RC[[1]][1,], colour = 'SARIMA')) + 
+  geom_line(aes(1:12, eachparameter.RC[[1]][11,], colour = 'Runoff')) +
+  labs(x = 'Horizon', y = 'MAE', colour = 'Model')+
+  scale_x_continuous(breaks = 1:12)+
+  theme(legend.position = "bottom",
+        legend.box.background = element_rect(),
+        legend.text = element_text(size = 10)
+        ))
+#ggsave(filename = "plots/RC_step0.png", plot = g)
+```
+
+#### Runoff
+
+The addition of SWVL1 to our Runoff model has the lowest MAE with 0.1111419, we will include this variable for our next iteration.
+
+```{r step 1 RC, warning=F}
+variables <- c("meanTemp.", "maxTemp.", "minTemp.", "prec.", "ndvi.", "ndwi.", "evi.", "evp.", "lst.", "runoff.", "swvl1.")
+keep <- c("runoff.")
+model.runoff.RC <- arima.xreg.12step.keep(parameters.RC, variables, keep, 0,0,2,0,1,1)
+names <- c("SARIMA", "+meanTemp.", "+maxTemp.", "+minTemp.", "+prec.", "+ndvi.", "+ndwi.", "+evi.", "+evp.", "+lst.", "+swvl1.")
+for (i in 1:length(names)) {
+  model.runoff.RC[[2]][i, 'variable']<- names[i]
+}
+model.runoff.RC[[2]]
+
+(g <-ggplot()+ 
+  geom_line(aes(1:12, model.runoff.RC[[1]][1,], colour = 'SARIMA')) + 
+  geom_line(aes(1:12, eachparameter.RC[[1]][11,], colour = 'Runoff')) +
+  geom_line(aes(1:12, model.runoff.RC[[1]][11,], colour = 'Runoff+SWVL1')) +
+  labs(x = 'Horizonte', y = 'MAE', colour = 'Modelo')+
+  scale_x_continuous(breaks = 1:12)+
+  theme(legend.position = "bottom",
+        legend.box.background = element_rect(),
+        legend.text = element_text(size = 10)
+        ))
+#ggsave(filename = "plots/RC_step1.png", plot = g)
+```
+
+#### Runoff + SWVL1
+
+No further improvement to our model was achieved, so our final model will include Runoff and SWVL1 as external regressors for the dengue cases in the province of Mariscal Ramon Castilla.
+
+```{r step 2 RC, warning=F}
+variables <- c("meanTemp.", "maxTemp.", "minTemp.", "prec.", "ndvi.", "ndwi.", "evi.", "evp.", "lst.", "runoff.", "swvl1.")
+keep <- c("runoff.", "swvl1.")
+model.runoff.swvl1.RC <- arima.xreg.12step.keep(parameters.RC, variables, keep, 0,0,2,0,1,1)
+names <- c("SARIMA", "+meanTemp.", "+maxTemp.", "+minTemp.", "+prec.", "+ndvi.", "+ndwi.", "+evi.", "+evp.", "+lst.")
+for (i in 1:length(names)) {
+  model.runoff.swvl1.RC[[2]][i, 'variable']<- names[i]
+}
+model.runoff.swvl1.RC[[2]]
+
+(g <- ggplot()+ 
+  geom_line(aes(1:12, model.runoff.swvl1.RC[[1]][1,], colour = 'SARIMA')) + 
+  geom_line(aes(1:12, model.runoff.RC[[1]][11,], colour = 'Runoff+SWVL1')) +
+  labs(x = 'Horizonte', y = 'MAE', colour = 'Modelo')+
+  scale_x_continuous(breaks = 1:12)+
+  theme(legend.position = "bottom",
+        legend.box.background = element_rect(),
+        legend.text = element_text(size = 10)
+        ))
+#ggsave(filename = "plots/RC_step2.png", plot = g)
+```
+
+## Maynas 
+
+### Environmental variables time series and lagged predictors {.tabset .tabset-fade}
+```{r time series variables MY, warning=F}
+ts.MY = ts(dt[dt$province == "Maynas", c('den1k')], frequency = 12, start = 2003) # TS
+meanTemp.MY = ts(dt[dt$province == "Maynas", c('meanTemperature')], frequency = 12, start = 2003) # TS
+maxTemp.MY = ts(dt[dt$province == "Maynas", c('maxTemperature')], frequency = 12, start = 2003) # TS
+minTemp.MY = ts(dt[dt$province == "Maynas", c('minTemperature')], frequency = 12, start = 2003) # TS
+prec.MY = ts(dt[dt$province == "Maynas", c('precipitation')], frequency = 12, start = 2003) # TS
+ndvi.MY = ts(dt[dt$province == "Maynas", c('NDVI')], frequency = 12, start = 2003) # TS
+ndwi.MY = ts(dt[dt$province == "Maynas", c('NDWI')], frequency = 12, start = 2003) # TS
+evi.MY = ts(dt[dt$province == "Maynas", c('EVI')], frequency = 12, start = 2003) # TS
+et.MY = ts(dt[dt$province == "Maynas", c('ET')], frequency = 12, start = 2003) # TS
+evp.MY = ts(dt[dt$province == "Maynas", c('evp')], frequency = 12, start = 2003) # TS
+lst.MY = ts(dt[dt$province == "Maynas", c('LST')], frequency = 12, start = 2003) # TS
+runoff.MY = ts(dt[dt$province == "Maynas", c('runoff')], frequency = 12, start = 2003) # TS
+swvl1.MY = ts(dt[dt$province == "Maynas", c('swvl1')], frequency = 12, start = 2003) # TS
+```
+
+```{r cross correlation MY, warning=F, fig.align = "center"}
+env.var <- list(meanTemp.MY, maxTemp.MY, minTemp.MY, prec.MY, ndvi.MY, ndwi.MY, evi.MY, et.MY, evp.MY, lst.MY, 
+            runoff.MY, swvl1.MY)
+for (i in 1:length(env.var)) { # iterate between environmental factors
+  
+  # ccf and pacf plots
+  temp.ccf <- ccf(as.numeric(env.var[[i]]), as.numeric(ts.MY), type = "correlation", plot = FALSE) # ccf
+  temp.ccfdf <- with(temp.ccf, data.frame(lag, acf)) # get df from ccf to plot it with ggplot
+  conf.level <- 0.95 # confidence level
+  ciline <- qnorm((1 - conf.level)/2)/sqrt(length(ts.MY)) # confidence lines
+  #ccf
+  q <- ggplot(data = temp.ccfdf, mapping = aes(x = lag, y = acf)) +
+      geom_hline(aes(yintercept = 0)) +
+      geom_segment(mapping = aes(xend = lag, yend = 0))+
+      geom_hline(aes(yintercept = ciline), linetype = 3, color = 'darkblue') + 
+      geom_hline(aes(yintercept = -ciline), linetype = 3, color = 'darkblue')+
+      labs(title = colnames(env.var[[i]]))+
+      theme_bw() +
+      theme(panel.grid = element_blank(),
+            axis.text.x = element_text(angle = 0, vjust=0.5, size = 8),
+            axis.text.y = element_text(angle = 0, vjust=0.5, size = 8),
+            axis.title= element_text(size=8,face="bold"),
+            title = element_text(angle = 0, vjust=0.5, size = 8, face = 'bold'))
+ 
+  #
+  assign(paste0('ccf.', i), q)
+}
+#crosscorrelation.plots <- mget(ls(pattern = 'ccf.*'))
+crosscorrelation.plots <- mget(c('ccf.1', 'ccf.2', "ccf.3", "ccf.4", "ccf.5", "ccf.6", "ccf.7", "ccf.8", 
+                                 "ccf.9", "ccf.10", "ccf.11", "ccf.12"))
+
+(plot.ccf <- do.call(plot_grid, crosscorrelation.plots))
+#ggsave(filename = "plots/MY_ccf.png", plot = plot.ccf)
+```
+
+- Mean temperature: 0, 1, 2, and 3
+- Maximum temperature: 0, 2, and 3
+- Minimum temperature: 0, 6, and 7
+- Precipitation: 0, 5, and 6
+- NDVI: 0, 4, 5, and 6
+- NDWI: 0, 5, 6, and 7
+- EVI: 0, 4, and 5
+- Evaporation: 0, 3, 4, and 5
+- Land surface temperature: 0, 3, 4, and 5
+- Runoff: 0, 3, 4, and 5
+- Surface water volumetric layer: 0, 3, 4, 5, and 6
+
+```{r data management2 MY, warning=F}
+# lagged predictors
+## mean temp
+meanTemp.lags.MY <- ts(cbind(
+  meanTemp.Lag0 = meanTemp.MY,
+  meanTemp.Lag1 = stats::lag(meanTemp.MY, -1),
+  meanTemp.Lag2 = stats::lag(meanTemp.MY, -2),
+  meanTemp.Lag3 = stats::lag(meanTemp.MY, -3)
+), start = 2003, frequency = 12)
+
+meanTemp.lags.MY <- ts(meanTemp.lags.MY[1:132, 1:4], start = 2003, frequency = 12)
+## max temp
+maxTemp.lags.MY <- ts(cbind(
+  maxTemp.Lag0 = maxTemp.MY,
+  maxTemp.Lag2 = stats::lag(maxTemp.MY, -2),
+  maxTemp.Lag3 = stats::lag(maxTemp.MY, -3)
+), start = 2003, frequency = 12)
+
+maxTemp.lags.MY <- ts(maxTemp.lags.MY[1:132, 1:3], start = 2003, frequency = 12)
+## min temp
+minTemp.lags.MY <- ts(cbind(
+  minTemp.Lag0 = minTemp.MY,
+  minTemp.Lag6 = stats::lag(minTemp.MY, -6),
+  minTemp.Lag7 = stats::lag(minTemp.MY, -7)
+), start = 2003, frequency = 12)
+
+minTemp.lags.MY <- ts(minTemp.lags.MY[1:132, 1:3], start = 2003, frequency = 12)
+## precipitation
+prec.lags.MY <- ts(cbind(
+  prec.Lag0 = prec.MY,
+  prec.Lag5 = stats::lag(prec.MY, -5),
+  prec.Lag6 = stats::lag(prec.MY, -6)
+), start = 2003, frequency = 12)
+
+prec.lags.MY <- ts(prec.lags.MY[1:132, 1:3], start = 2003, frequency = 12)
+## ndvi
+ndvi.lags.MY <- ts(cbind(
+  ndvi.Lag0 = ndvi.MY,
+  ndvi.Lag4 = stats::lag(ndvi.MY, -4),
+  ndvi.Lag5 = stats::lag(ndvi.MY, -5),
+  ndvi.Lag6 = stats::lag(ndvi.MY, -6)
+), start = 2003, frequency = 12)
+
+ndvi.lags.MY <- ts(ndvi.lags.MY[1:132, 1:4], start = 2003, frequency = 12)
+## ndwi
+ndwi.lags.MY <- ts(cbind(
+  ndwi.Lag0 = ndwi.MY,
+  ndwi.Lag5 = stats::lag(ndwi.MY, -5),
+  ndwi.Lag6 = stats::lag(ndwi.MY, -6),
+  ndwi.Lag7 = stats::lag(ndwi.MY, -7)
+), start = 2003, frequency = 12)
+
+ndwi.lags.MY <- ts(ndwi.lags.MY[1:132, 1:4], start = 2003, frequency = 12)
+## evi
+evi.lags.MY <- ts(cbind(
+  evi.Lag0 = evi.MY,
+  evi.Lag4 = stats::lag(evi.MY, -4),
+  evi.Lag5 = stats::lag(evi.MY, -5)
+), start = 2003, frequency = 12)
+
+evi.lags.MY <- ts(evi.lags.MY[1:132, 1:3], start = 2003, frequency = 12)
+## evaporation
+evp.lags.MY <- ts(cbind(
+  evp.Lag0 = evp.LO,
+  evp.Lag3 = stats::lag(evp.MY, -3),
+  evp.Lag4 = stats::lag(evp.MY, -4),
+  evp.Lag5 = stats::lag(evp.MY, -5)
+), start = 2003, frequency = 12)
+
+evp.lags.MY <- ts(evp.lags.MY[1:132, 1:4], start = 2003, frequency = 12)
+## lst
+lst.lags.MY <- ts(cbind(
+  lst.Lag0 = lst.MY,
+  lst.Lag3 = stats::lag(lst.MY, -3),
+  lst.Lag4 = stats::lag(lst.MY, -4),
+  lst.Lag5 = stats::lag(lst.MY, -5)
+), start = 2003, frequency = 12)
+
+lst.lags.MY <- ts(lst.lags.MY[1:132, 1:4], start = 2003, frequency = 12)
+## runoff
+runoff.lags.MY <- ts(cbind(
+  runoff.Lag0 = runoff.MY,
+  runoff.Lag3 = stats::lag(runoff.MY, -3),
+  runoff.Lag4 = stats::lag(runoff.MY, -4),
+  runoff.Lag5 = stats::lag(runoff.MY, -5)
+), start = 2003, frequency = 12)
+
+runoff.lags.MY <- ts(runoff.lags.MY[1:132, 1:4], start = 2003, frequency = 12)
+## swvl1
+swvl1.lags.MY <- ts(cbind(
+  swvl1.Lag0 = swvl1.MY,
+  swvl1.Lag3 = stats::lag(swvl1.MY, -3),
+  swvl1.Lag4 = stats::lag(swvl1.MY, -4),
+  swvl1.Lag5 = stats::lag(swvl1.MY, -5),
+  swvl1.Lag6 = stats::lag(swvl1.MY, -6)
+), start = 2003, frequency = 12)
+
+swvl1.lags.MY <- ts(swvl1.lags.MY[1:132, 1:5], start = 2003, frequency = 12)
+
+```
+
+#### Mean temperature 
+
+Mean temperature with 3 months of lag was the best model, we will use this variable for our next models.
+
+```{r lagged mean temperature MY, warning=F}
+meanTemp.df.MY <- arima.xreg.12step.lagvars(ts.MY, meanTemp.lags.MY, 0,0,1,0,1,1)
+variables <- c("SARIMA", "meanTemp", "meanTemp 2 lags", "meanTemp 3 lags", "meanTemp 4 lags")
+for (i in 1:length(variables)) {
+  meanTemp.df.MY[[2]][i, 'variable']<- variables[i]
+}
+meanTemp.df.MY2 <- arima.xreg.12step.separateLags(ts.MY, meanTemp.lags.MY, 0,0,1,0,1,1)
+variables <- c("SARIMA", "meanTemp", "meanTemp.Lag1", "meanTemp.Lag2", "meanTemp.Lag3")
+for (i in 1:length(variables)) {
+  meanTemp.df.MY2[[2]][i, 'variable']<- variables[i]
+}
+meanTemp.df.MY3 <- rbind(meanTemp.df.MY[[2]], meanTemp.df.MY2[[2]])
+meanTemp.df.MY3 <- meanTemp.df.MY3[!duplicated(meanTemp.df.MY3),]
+meanTemp.df.MY3
+```
+
+#### Max temperature 
+
+Maximum temperature with 3 months of lag was the best model, we will use this variable for our next models.
+
+```{r lagged max temperature MY, warning=F}
+maxTemp.df.MY <- arima.xreg.12step.lagvars(ts.MY, maxTemp.lags.MY, 0,0,1,0,1,1)
+variables <- c("SARIMA", "maxTemp", "maxTemp 2 lags", "maxTemp 3 lags")
+for (i in 1:length(variables)) {
+  maxTemp.df.MY[[2]][i, 'variable']<- variables[i]
+}
+maxTemp.df.MY2 <- arima.xreg.12step.separateLags(ts.MY, maxTemp.lags.MY, 0,0,1,0,1,1)
+variables <- c("SARIMA", "maxTemp", "maxTemp.Lag2", "maxTemp.Lag3")
+for (i in 1:length(variables)) {
+  maxTemp.df.MY2[[2]][i, 'variable']<- variables[i]
+}
+maxTemp.df.MY3 <- rbind(maxTemp.df.MY[[2]], maxTemp.df.MY2[[2]])
+maxTemp.df.MY3 <- maxTemp.df.MY3[!duplicated(maxTemp.df.MY3),]
+maxTemp.df.MY3
+```
+
+#### Min temperature 
+
+Minimum temperature with 7 months of lag was the best model, we will use this variable for our next models.
+
+```{r lagged min temperature MY, warning=F}
+minTemp.df.MY <- arima.xreg.12step.lagvars(ts.MY, minTemp.lags.MY, 0,0,1,0,1,1)
+variables <- c("SARIMA", "minTemp", "minTemp 2 lags", "minTemp 3 lags")
+for (i in 1:length(variables)) {
+  minTemp.df.MY[[2]][i, 'variable']<- variables[i]
+}
+minTemp.df.MY2 <- arima.xreg.12step.separateLags(ts.MY, minTemp.lags.MY, 0,0,1,0,1,1)
+variables <- c("SARIMA", "minTemp", "minTemp.Lag6", "minTemp.Lag7")
+for (i in 1:length(variables)) {
+  minTemp.df.MY2[[2]][i, 'variable']<- variables[i]
+}
+minTemp.df.MY3 <- rbind(minTemp.df.MY[[2]], minTemp.df.MY2[[2]])
+minTemp.df.MY3 <- minTemp.df.MY3[!duplicated(minTemp.df.MY3),]
+minTemp.df.MY3
+```
+
+#### Precipitation 
+
+Precipitation with 0 months of lag was the best model, we will use this variable for our next models.
+
+```{r lagged precipitation MY, warning=F}
+prec.df.MY <- arima.xreg.12step.lagvars(ts.MY, prec.lags.MY, 0,0,1,0,1,1)
+variables <- c("SARIMA", "prec", "prec 2 lags", "prec 3 lags")
+for (i in 1:length(variables)) {
+  prec.df.MY[[2]][i, 'variable']<- variables[i]
+}
+prec.df.MY2 <- arima.xreg.12step.separateLags(ts.MY, prec.lags.MY, 0,0,1,0,1,1)
+variables <- c("SARIMA", "prec", "prec.Lag5", "prec.Lag6")
+for (i in 1:length(variables)) {
+  prec.df.MY2[[2]][i, 'variable']<- variables[i]
+}
+prec.df.MY3 <- rbind(prec.df.MY[[2]], prec.df.MY2[[2]])
+prec.df.MY3 <- prec.df.MY3[!duplicated(prec.df.MY3),]
+prec.df.MY3
+```
+
+#### NDVI 
+
+NDVI with 0 months of lag was the best model, we will use this variable for our next models.
+
+```{r lagged NDVI MY, warning=F}
+ndvi.df.MY <- arima.xreg.12step.lagvars(ts.MY, ndvi.lags.MY, 0,0,1,0,1,1)
+variables <- c("SARIMA", "ndvi", "ndvi 2 lags", "ndvi 3 lags", "ndvi 4 lags")
+for (i in 1:length(variables)) {
+  ndvi.df.MY[[2]][i, 'variable']<- variables[i]
+}
+ndvi.df.MY2 <- arima.xreg.12step.separateLags(ts.MY, ndvi.lags.MY, 0,0,1,0,1,1)
+variables <- c("SARIMA", "ndvi", "ndvi.Lag4", "ndvi.Lag5", "ndvi.Lag6")
+for (i in 1:length(variables)) {
+  ndvi.df.MY2[[2]][i, 'variable']<- variables[i]
+}
+ndvi.df.MY3 <- rbind(ndvi.df.MY[[2]], ndvi.df.MY2[[2]])
+ndvi.df.MY3 <- ndvi.df.MY3[!duplicated(ndvi.df.MY3),]
+ndvi.df.MY3
+```
+
+#### NDWI 
+
+NDWI with 5 months of lag was the best model, we will use this variable for our next models.
+
+```{r lagged NDWI MY, warning=F}
+ndwi.df.MY <- arima.xreg.12step.lagvars(ts.MY, ndwi.lags.MY, 0,0,1,0,1,1)
+variables <- c("SARIMA", "ndwi", "ndwi 2 lags", "ndwi 3 lags", "ndwi 4 lags")
+for (i in 1:length(variables)) {
+  ndwi.df.MY[[2]][i, 'variable']<- variables[i]
+}
+ndwi.df.MY2 <- arima.xreg.12step.separateLags(ts.MY, ndwi.lags.MY, 0,0,1,0,1,1)
+variables <- c("SARIMA", "ndwi", "ndwi.Lag5", "ndwi.Lag6", "ndwi.Lag7")
+for (i in 1:length(variables)) {
+  ndwi.df.MY2[[2]][i, 'variable']<- variables[i]
+}
+ndwi.df.MY3 <- rbind(ndwi.df.MY[[2]], ndwi.df.MY2[[2]])
+ndwi.df.MY3 <- ndwi.df.MY3[!duplicated(ndwi.df.MY3),]
+ndwi.df.MY3
+```
+
+#### EVI 
+
+EVI with 0 months of lag was the best model, we will use this variable for our next models.
+
+```{r lagged EVI MY, warning=F}
+evi.df.MY <- arima.xreg.12step.lagvars(ts.MY, evi.lags.MY, 0,0,1,0,1,1)
+variables <- c("SARIMA", "evi", "evi 2 lags", "evi 3 lags")
+for (i in 1:length(variables)) {
+  evi.df.MY[[2]][i, 'variable']<- variables[i]
+}
+evi.df.MY2 <- arima.xreg.12step.separateLags(ts.MY, evi.lags.MY, 0,0,1,0,1,1)
+variables <- c("SARIMA", "evi", "evi.Lag4", "evi.Lag5")
+for (i in 1:length(variables)) {
+  evi.df.MY2[[2]][i, 'variable']<- variables[i]
+}
+evi.df.MY3 <- rbind(evi.df.MY[[2]], evi.df.MY2[[2]])
+evi.df.MY3 <- evi.df.MY3[!duplicated(evi.df.MY3),]
+evi.df.MY3
+```
+
+#### Evaporation 
+
+Evaporation with 3 months of lag was the best model, we will use this variable for our next models.
+
+```{r lagged Evaporation MY, warning=F}
+evp.df.MY <- arima.xreg.12step.lagvars(ts.MY, evp.lags.MY, 0,0,1,0,1,1)
+variables <- c("SARIMA", "evp", "evp 2 lags", "evp 3 lags", "evp 4 lags")
+for (i in 1:length(variables)) {
+  evp.df.MY[[2]][i, 'variable']<- variables[i]
+}
+evp.df.MY2 <- arima.xreg.12step.separateLags(ts.MY, evp.lags.MY, 0,0,1,0,1,1)
+variables <- c("SARIMA", "evp", "evp.Lag3", "evp.Lag4", "evp.Lag5")
+for (i in 1:length(variables)) {
+  evp.df.MY2[[2]][i, 'variable']<- variables[i]
+}
+evp.df.MY3 <- rbind(evp.df.MY[[2]], evp.df.MY2[[2]])
+evp.df.MY3 <- evp.df.MY3[!duplicated(evp.df.MY3),]
+evp.df.MY3
+```
+
+#### Land surface temperature 
+
+Land surface temperature with 3 months of lag was the best model, we will use this variable for our next models.
+
+```{r lagged Land surface temperature MY, warning=F}
+lst.df.MY <- arima.xreg.12step.lagvars(ts.MY, lst.lags.MY, 0,0,1,0,1,1)
+variables <- c("SARIMA", "lst", "lst 2 lags", "lst 3 lags", "lst 4 lags")
+for (i in 1:length(variables)) {
+  lst.df.MY[[2]][i, 'variable']<- variables[i]
+}
+lst.df.MY2 <- arima.xreg.12step.separateLags(ts.MY, lst.lags.MY, 0,0,1,0,1,1)
+variables <- c("SARIMA", "lst", "lst.Lag3", "lst.Lag4", "lst.Lag5")
+for (i in 1:length(variables)) {
+  lst.df.MY2[[2]][i, 'variable']<- variables[i]
+}
+lst.df.MY3 <- rbind(lst.df.MY[[2]], lst.df.MY2[[2]])
+lst.df.MY3 <- lst.df.MY3[!duplicated(lst.df.MY3),]
+lst.df.MY3
+```
+
+#### Runoff 
+
+Runoff with 0 months of lag was the best model, we will use this variable for our next models.
+
+```{r lagged Runoff MY, warning=F}
+runoff.df.MY <- arima.xreg.12step.lagvars(ts.MY, runoff.lags.MY, 0,0,1,0,1,1)
+variables <- c("SARIMA", "runoff", "runoff 2 lags", "runoff 3 lags", "runoff 4 lags")
+for (i in 1:length(variables)) {
+  runoff.df.MY[[2]][i, 'variable']<- variables[i]
+}
+runoff.df.MY2 <- arima.xreg.12step.separateLags(ts.MY, runoff.lags.MY, 0,0,1,0,1,1)
+variables <- c("SARIMA", "runoff", "runoff.Lag3", "runoff.Lag4", "runoff.Lag5")
+for (i in 1:length(variables)) {
+  runoff.df.MY2[[2]][i, 'variable']<- variables[i]
+}
+runoff.df.MY3 <- rbind(runoff.df.MY[[2]], runoff.df.MY2[[2]])
+runoff.df.MY3 <- runoff.df.MY3[!duplicated(runoff.df.MY3),]
+runoff.df.MY3
+```
+
+#### SWVL1 
+
+SWVL1 with 0 months of lag was the best model, we will use this variable for our next models.
+
+```{r lagged SWVL1 MY, warning=F}
+swvl1.df.MY <- arima.xreg.12step.lagvars(ts.MY, swvl1.lags.MY, 0,0,1,0,1,1)
+variables <- c("SARIMA", "swvl1", "swvl1 2 lags", "swvl1 3 lags", "swvl1 4 lags", "swvl1 5 lags")
+for (i in 1:length(variables)) {
+  swvl1.df.MY[[2]][i, 'variable']<- variables[i]
+}
+swvl1.df.MY2 <- arima.xreg.12step.separateLags(ts.MY, swvl1.lags.MY, 0,0,1,0,1,1)
+variables <- c("SARIMA", "swvl1", "swvl1.Lag3", "swvl1.Lag4", "swvl1.Lag5", "swvl1.Lag6")
+for (i in 1:length(variables)) {
+  swvl1.df.MY2[[2]][i, 'variable']<- variables[i]
+}
+swvl1.df.MY3 <- rbind(swvl1.df.MY[[2]], swvl1.df.MY2[[2]])
+swvl1.df.MY3 <- swvl1.df.MY3[!duplicated(swvl1.df.MY3),]
+swvl1.df.MY3
+```
+
+### Model fitting with external regressors
+
+Now we will compare our final variables and pick the first to include in our final model.
+
+#### each parameter 
+
+```{r data management3 MY, warning=F}
+parameters.MY <- cbind(
+  ts = ts.MY,
+  meanTemp.Lag3 = stats::lag(meanTemp.MY, -3),
+  maxTemp.Lag3 = stats::lag(maxTemp.MY, -3),
+  minTemp.Lag7 = stats::lag(minTemp.MY, -7),
+  prec.Lag5 = prec.MY, 
+  ndvi.Lag0 = ndvi.MY,
+  ndwi.Lag5 = stats::lag(ndwi.MY, -5),
+  evi.Lag0 = evi.MY,
+  evp.Lag3 = stats::lag(evp.MY, -3),
+  lst.Lag3 = stats::lag(lst.MY, -3),
+  runoff.Lag0 = runoff.MY,
+  swvl1.Lag0 = swvl1.MY
+)
+
+parameters.MY <- ts(parameters.MY[1:132, 1:12], start = 2003, frequency = 12)
+```
+
+EVI has the lowest MAE with 1.129857, we will use this combination for our next iteration.
+
+```{r each parameter MY, warning=F}
+variables <- c("meanTemp.", "maxTemp.", "minTemp.", "prec.", "ndvi.", "ndwi.", "evi.", "evp.", "lst.", "runoff.", "swvl1.")
+eachparameter.MY <-arima.xreg.12step(parameters.MY, variables, 0,0,1,0,1,1)
+variables <- c("SARIMA", "meanTemp.", "maxTemp.", "minTemp.", "prec.", "ndvi.", "ndwi.", "evi.", "evp.", "lst.", "runoff.", "swvl1.")
+for (i in 1:length(variables)) {
+  eachparameter.MY[[2]][i, 'variable']<- variables[i]
+}
+eachparameter.MY[[2]]
+
+(g <- ggplot()+ 
+  geom_line(aes(1:12, eachparameter.MY[[1]][1,], colour = 'SARIMA')) + 
+  geom_line(aes(1:12, eachparameter.MY[[1]][8,], colour = 'EVI')) +
+  labs(x = 'Horizonte', y = 'MAE', colour = 'Modelo')+
+  scale_x_continuous(breaks = 1:12)+
+  theme(legend.position = "bottom",
+        legend.box.background = element_rect(),
+        legend.text = element_text(size = 10)
+        ))
+#ggsave(filename = "plots/MY_step0.png", plot = g)
+```
+
+#### EVI
+
+The addition of Land surface temperature to our EVI model has the lowest MAE with 1.085695, we will include this variable for our next iteration.
+
+```{r step 1 MY, warning=F}
+variables <- c("meanTemp.", "maxTemp.", "minTemp.", "prec.", "ndvi.", "ndwi.", "evi.", "evp.", "lst.", "runoff.", "swvl1.")
+keep <- c("evi.")
+model.evi.MY <- arima.xreg.12step.keep(parameters.MY, variables, keep, 0,0,1,0,1,1)
+names <- c("SARIMA", "+meanTemp.", "+maxTemp.", "+minTemp.", "+prec.", "+ndvi.", "+ndwi.", "+evp.", "+lst.", "+runoff.", "+swvl1.")
+for (i in 1:length(names)) {
+  model.evi.MY[[2]][i, 'variable']<- names[i]
+}
+model.evi.MY[[2]]
+
+(g <- ggplot()+ 
+  geom_line(aes(1:12, model.evi.MY[[1]][1,], colour = 'SARIMA')) + 
+  geom_line(aes(1:12, eachparameter.MY[[1]][8,], colour = 'EVI')) +
+  geom_line(aes(1:12, model.evi.MY[[1]][9,], colour = 'EVI+LST')) +
+  labs(x = 'Horizonte', y = 'MAE', colour = 'Modelo')+
+  scale_x_continuous(breaks = 1:12)+
+  theme(legend.position = "bottom",
+        legend.box.background = element_rect(),
+        legend.text = element_text(size = 10)
+        ))
+#ggsave(filename = "plots/MY_step1.png", plot = g)
+```
+#### EVI + LST
+
+The addition of NDWI to our EVI and Land surface temperature model has the lowest MAE with 1.064471, we will include this variable for our next iteration.
+
+```{r step 2 MY, warning=F}
+variables <- c("meanTemp.", "maxTemp.", "minTemp.", "prec.", "ndvi.", "ndwi.", "evi.", "evp.", "lst.", "runoff.", "swvl1.")
+keep <- c("evi.", "lst.")
+model.evi.lst.MY <- arima.xreg.12step.keep(parameters.MY, variables, keep, 0,0,1,0,1,1)
+names <- c("SARIMA", "+meanTemp.", "+maxTemp.", "+minTemp.", "+prec.", "+ndvi.", "+ndwi.", "+evp.", "+runoff.", "+swvl1.")
+for (i in 1:length(names)) {
+  model.evi.lst.MY[[2]][i, 'variable']<- names[i]
+}
+model.evi.lst.MY[[2]]
+
+(g <- ggplot()+ 
+  geom_line(aes(1:12, model.evi.lst.MY[[1]][1,], colour = 'SARIMA')) + 
+  geom_line(aes(1:12, model.evi.MY[[1]][9,], colour = 'EVI+LST')) +
+  geom_line(aes(1:12, model.evi.lst.MY[[1]][7,], colour = 'EVI+LST+NDWI')) +
+  labs(x = 'Horizonte', y = 'MAE', colour = 'Modelo')+
+  scale_x_continuous(breaks = 1:12)+
+  theme(legend.position = "bottom",
+        legend.box.background = element_rect(),
+        legend.text = element_text(size = 10)
+        ))
+#ggsave(filename = "plots/MY_step2.png", plot = g)
+```
+
+#### EVI + LST + NDWI
+
+The addition of Runoff to our EVI, Land surface temperature and NDWI model has the lowest MAE with 1.054019, we will include this variable for our next iteration.
+
+```{r step 3 MY, warning=F}
+variables <- c("meanTemp.", "maxTemp.", "minTemp.", "prec.", "ndvi.", "ndwi.", "evi.", "evp.", "lst.", "runoff.", "swvl1.")
+keep <- c("evi.", "lst.", "ndwi.")
+model.evi.lst.ndwi.MY <- arima.xreg.12step.keep(parameters.MY, variables, keep, 0,0,1,0,1,1)
+names <- c("SARIMA", "+meanTemp.", "+maxTemp.", "+minTemp.", "+prec.", "+ndvi.", "+evp.", "+runoff.", "+swvl1.")
+for (i in 1:length(names)) {
+  model.evi.lst.ndwi.MY[[2]][i, 'variable']<- names[i]
+}
+model.evi.lst.ndwi.MY[[2]]
+
+(g <- ggplot()+ 
+  geom_line(aes(1:12, model.evi.lst.ndwi.MY[[1]][1,], colour = 'SARIMA')) + 
+  geom_line(aes(1:12, model.evi.lst.MY[[1]][7,], colour = 'EVI+LST+NDWI')) +
+  geom_line(aes(1:12, model.evi.lst.ndwi.MY[[1]][8,], colour = 'EVI+LST+NDWI+Runoff')) +
+  labs(x = 'Horizonte', y = 'MAE', colour = 'Modelo')+
+  scale_x_continuous(breaks = 1:12)+
+  theme(legend.position = "bottom",
+        legend.box.background = element_rect(),
+        legend.text = element_text(size = 10)
+        ))
+#ggsave(filename = "plots/MY_step3.png", plot = g)
+```
+
+#### EVI + LST + NDWI + Runoff
+
+The addition of EVP to our EVI, Land surface temperature, NDWI and Runoff model has the lowest MAE with 1.044335, we will include this variable for our next iteration.
+
+```{r step 4 MY, warning=F}
+variables <- c("meanTemp.", "maxTemp.", "minTemp.", "prec.", "ndvi.", "ndwi.", "evi.", "evp.", "lst.", "runoff.", "swvl1.")
+keep <- c("evi.", "lst.", "ndwi.", "runoff.")
+model.evi.lst.ndwi.runoff.MY <- arima.xreg.12step.keep(parameters.MY, variables, keep, 0,0,1,0,1,1)
+names <- c("SARIMA", "+meanTemp.", "+maxTemp.", "+minTemp.", "+prec.", "+ndvi.", "+evp.", "+swvl1.")
+for (i in 1:length(names)) {
+  model.evi.lst.ndwi.runoff.MY[[2]][i, 'variable']<- names[i]
+}
+model.evi.lst.ndwi.runoff.MY[[2]]
+
+(g <- ggplot()+ 
+  geom_line(aes(1:12, model.evi.lst.ndwi.runoff.MY[[1]][1,], colour = 'SARIMA')) + 
+  geom_line(aes(1:12, model.evi.lst.ndwi.MY[[1]][8,], colour = 'EVI+LST+NDWI+Runoff')) +
+  geom_line(aes(1:12, model.evi.lst.ndwi.runoff.MY[[1]][7,], colour = 'EVI+LST+NDWI+Runoff+EVP')) + 
+  labs(x = 'Horizonte', y = 'MAE', colour = 'Modelo')+
+  scale_x_continuous(breaks = 1:12)+
+  theme(legend.position = "bottom",
+        legend.box.background = element_rect(),
+        legend.text = element_text(size = 10)
+        ))
+#ggsave(filename = "plots/MY_step4.png", plot = g)
+```
+
+#### EVI + LST + NDWI + Runoff + EVP
+
+No further improvement to our model was achieved, so our final model will include EVI, Land surface temperature, NDWI, Runoff and EVP as external regressors for the dengue cases in the province of Mariscal Ramon Castilla.
+
+```{r step 5 MY, warning=F}
+variables <- c("meanTemp.", "maxTemp.", "minTemp.", "prec.", "ndvi.", "ndwi.", "evi.", "evp.", "lst.", "runoff.", "swvl1.")
+keep <- c("evi.", "lst.", "ndwi.", "runoff.", "evp.")
+model.evi.lst.ndwi.runoff.evp.MY <- arima.xreg.12step.keep(parameters.MY, variables, keep, 0,0,1,0,1,1)
+names <- c("SARIMA", "+meanTemp.", "+maxTemp.", "+minTemp.", "+prec.", "+ndvi.", "+swvl1.")
+for (i in 1:length(names)) {
+  model.evi.lst.ndwi.runoff.evp.MY[[2]][i, 'variable']<- names[i]
+}
+model.evi.lst.ndwi.runoff.evp.MY[[2]]
+
+(g <- ggplot()+ 
+  geom_line(aes(1:12, model.evi.lst.ndwi.runoff.evp.MY[[1]][1,], colour = 'SARIMA')) + 
+  geom_line(aes(1:12, model.evi.lst.ndwi.runoff.MY[[1]][7,], colour = 'EVI+LST+NDWI+Runoff+EVP')) +
+  labs(x = 'Horizonte', y = 'MAE', colour = 'Modelo')+
+  scale_x_continuous(breaks = 1:12)+
+  theme(legend.position = "bottom",
+        legend.box.background = element_rect(),
+        legend.text = element_text(size = 10)
+        ))
+#ggsave(filename = "plots/MY_step5.png", plot = g)
+```
+
+## Requena 
+
+### Environmental variables time series and lagged predictors {.tabset .tabset-fade}
+```{r time series variables RQ, warning=F}
+ts.RQ = ts(dt[dt$province == "Requena", c('den1k')], frequency = 12, start = 2003) # TS
+meanTemp.RQ = ts(dt[dt$province == "Requena", c('meanTemperature')], frequency = 12, start = 2003) # TS
+maxTemp.RQ = ts(dt[dt$province == "Requena", c('maxTemperature')], frequency = 12, start = 2003) # TS
+minTemp.RQ = ts(dt[dt$province == "Requena", c('minTemperature')], frequency = 12, start = 2003) # TS
+prec.RQ = ts(dt[dt$province == "Requena", c('precipitation')], frequency = 12, start = 2003) # TS
+ndvi.RQ = ts(dt[dt$province == "Requena", c('NDVI')], frequency = 12, start = 2003) # TS
+ndwi.RQ = ts(dt[dt$province == "Requena", c('NDWI')], frequency = 12, start = 2003) # TS
+evi.RQ = ts(dt[dt$province == "Requena", c('EVI')], frequency = 12, start = 2003) # TS
+et.RQ = ts(dt[dt$province == "Requena", c('ET')], frequency = 12, start = 2003) # TS
+evp.RQ = ts(dt[dt$province == "Requena", c('evp')], frequency = 12, start = 2003) # TS
+lst.RQ = ts(dt[dt$province == "Requena", c('LST')], frequency = 12, start = 2003) # TS
+runoff.RQ = ts(dt[dt$province == "Requena", c('runoff')], frequency = 12, start = 2003) # TS
+swvl1.RQ = ts(dt[dt$province == "Requena", c('swvl1')], frequency = 12, start = 2003) # TS
+```
+
+```{r cross correlation RQ, warning=F, fig.align = "center"}
+env.var <- list(meanTemp.RQ, maxTemp.RQ, minTemp.RQ, prec.RQ, ndvi.RQ, ndwi.RQ, evi.RQ, et.RQ, evp.RQ, lst.RQ, 
+            runoff.RQ, swvl1.RQ)
+for (i in 1:length(env.var)) { # iterate between environmental factors
+  
+  # ccf and pacf plots
+  temp.ccf <- ccf(as.numeric(env.var[[i]]), as.numeric(ts.RQ), type = "correlation", plot = FALSE) # ccf
+  temp.ccfdf <- with(temp.ccf, data.frame(lag, acf)) # get df from ccf to plot it with ggplot
+  conf.level <- 0.95 # confidence level
+  ciline <- qnorm((1 - conf.level)/2)/sqrt(length(ts.RQ)) # confidence lines
+  #ccf
+  q <- ggplot(data = temp.ccfdf, mapping = aes(x = lag, y = acf)) +
+      geom_hline(aes(yintercept = 0)) +
+      geom_segment(mapping = aes(xend = lag, yend = 0))+
+      geom_hline(aes(yintercept = ciline), linetype = 3, color = 'darkblue') + 
+      geom_hline(aes(yintercept = -ciline), linetype = 3, color = 'darkblue')+
+      labs(title = colnames(env.var[[i]]))+
+      theme_bw() +
+      theme(panel.grid = element_blank(),
+            axis.text.x = element_text(angle = 0, vjust=0.5, size = 8),
+            axis.text.y = element_text(angle = 0, vjust=0.5, size = 8),
+            axis.title= element_text(size=8,face="bold"),
+            title = element_text(angle = 0, vjust=0.5, size = 8, face = 'bold'))
+ 
+  #
+  assign(paste0('ccf.', i), q)
+}
+#crosscorrelation.plots <- mget(ls(pattern = 'ccf.*'))
+crosscorrelation.plots <- mget(c('ccf.1', 'ccf.2', "ccf.3", "ccf.4", "ccf.5", "ccf.6", "ccf.7", "ccf.8", 
+                                 "ccf.9", "ccf.10", "ccf.11", "ccf.12"))
+
+(plot.ccf <- do.call(plot_grid, crosscorrelation.plots))
+#ggsave(filename = "plots/RQ_ccf.png", plot = plot.ccf)
+```
+
+- Mean temperature: 0, 1, and 2
+- Maximum temperature: 0, 6, 7, and 8
+- Minimum temperature: 0, 5, 6, 7, and 8
+- Precipitation: 0, 5, and 6
+- NDVI: 0, 4, 5, and 6
+- NDWI: 0, 5, and 6
+- EVI: 0, 4, 5, and 6
+- Evaporation: 0, 3, and 4
+- Land surface temperature: 0, 4, and 5
+- Runoff: 0, and 4
+- Surface water volumetric layer: 0
+
+As Surface water volumetric layer only have significant correlation at lag 0 we will only test the other variables to see what is the best lag or combination of consecutive lags to use in the next step.
+
+```{r data management2 RQ, warning=F}
+# lagged predictors
+## mean temp
+meanTemp.lags.RQ <- ts(cbind(
+  meanTemp.Lag0 = meanTemp.RQ,
+  meanTemp.Lag1 = stats::lag(meanTemp.RQ, -1),
+  meanTemp.Lag2 = stats::lag(meanTemp.RQ, -2)
+), start = 2003, frequency = 12)
+
+meanTemp.lags.RQ <- ts(meanTemp.lags.RQ[1:132, 1:3], start = 2003, frequency = 12)
+## max temp
+maxTemp.lags.RQ <- ts(cbind(
+  maxTemp.Lag0 = maxTemp.RQ,
+  maxTemp.Lag6 = stats::lag(maxTemp.RQ, -6),
+  maxTemp.Lag7 = stats::lag(maxTemp.RQ, -7),
+  maxTemp.Lag8 = stats::lag(maxTemp.RQ, -8)
+), start = 2003, frequency = 12)
+
+maxTemp.lags.RQ <- ts(maxTemp.lags.RQ[1:132, 1:4], start = 2003, frequency = 12)
+## min temp
+minTemp.lags.RQ <- ts(cbind(
+  minTemp.Lag0 = minTemp.RQ,
+  minTemp.Lag5 = stats::lag(minTemp.RQ, -5),
+  minTemp.Lag6 = stats::lag(minTemp.RQ, -6),
+  minTemp.Lag7 = stats::lag(minTemp.RQ, -7),
+  minTemp.Lag8 = stats::lag(minTemp.RQ, -8)
+), start = 2003, frequency = 12)
+
+minTemp.lags.RQ <- ts(minTemp.lags.RQ[1:132, 1:5], start = 2003, frequency = 12)
+## precipitation
+prec.lags.RQ <- ts(cbind(
+  prec.Lag0 = prec.RQ,
+  prec.Lag5 = stats::lag(prec.RQ, -5),
+  prec.Lag6 = stats::lag(prec.RQ, -6)
+), start = 2003, frequency = 12)
+
+prec.lags.RQ <- ts(prec.lags.RQ[1:132, 1:3], start = 2003, frequency = 12)
+## ndvi
+ndvi.lags.RQ <- ts(cbind(
+  ndvi.Lag0 = ndvi.RQ,
+  ndvi.Lag4 = stats::lag(ndvi.RQ, -4),
+  ndvi.Lag5 = stats::lag(ndvi.RQ, -5),
+  ndvi.Lag6 = stats::lag(ndvi.RQ, -6)
+), start = 2003, frequency = 12)
+
+ndvi.lags.RQ <- ts(ndvi.lags.RQ[1:132, 1:4], start = 2003, frequency = 12)
+## ndwi
+ndwi.lags.RQ <- ts(cbind(
+  ndwi.Lag0 = ndwi.RQ,
+  ndwi.Lag5 = stats::lag(ndwi.RQ, -5),
+  ndwi.Lag6 = stats::lag(ndwi.RQ, -6)
+), start = 2003, frequency = 12)
+
+ndwi.lags.RQ <- ts(ndwi.lags.RQ[1:132, 1:3], start = 2003, frequency = 12)
+## evi
+evi.lags.RQ <- ts(cbind(
+  evi.Lag0 = evi.RQ,
+  evi.Lag4 = stats::lag(evi.RQ, -4),
+  evi.Lag5 = stats::lag(evi.RQ, -5),
+  evi.Lag6 = stats::lag(evi.RQ, -6)
+), start = 2003, frequency = 12)
+
+evi.lags.RQ <- ts(evi.lags.RQ[1:132, 1:4], start = 2003, frequency = 12)
+## evaporation
+evp.lags.RQ <- ts(cbind(
+  evp.Lag0 = evp.RQ,
+  evp.Lag3 = stats::lag(evp.RQ, -3),
+  evp.Lag4 = stats::lag(evp.RQ, -4)
+), start = 2003, frequency = 12)
+
+evp.lags.RQ <- ts(evp.lags.RQ[1:132, 1:3], start = 2003, frequency = 12)
+## lst
+lst.lags.RQ <- ts(cbind(
+  lst.Lag0 = lst.RQ,
+  lst.Lag4 = stats::lag(lst.RQ, -4),
+  lst.Lag5 = stats::lag(lst.RQ, -5)
+), start = 2003, frequency = 12)
+
+lst.lags.RQ <- ts(lst.lags.RQ[1:132, 1:3], start = 2003, frequency = 12)
+## runoff
+runoff.lags.RQ <- ts(cbind(
+  runoff.Lag0 = runoff.RQ,
+  runoff.Lag4 = stats::lag(runoff.RQ, -4)
+), start = 2003, frequency = 12)
+
+runoff.lags.RQ <- ts(runoff.lags.RQ[1:132, 1:2], start = 2003, frequency = 12)
+## swvl1
+swvl1.lags.RQ <- ts(cbind(
+  swvl1.Lag0 = swvl1.RQ
+), start = 2003, frequency = 12)
+
+swvl1.lags.RQ <- ts(swvl1.lags.RQ[1:132, 1:1], start = 2003, frequency = 12)
+
+```
+
+#### Mean temperature 
+
+Mean temperature with 1 month of lag was the best model, we will use this variable for our next models.
+
+```{r lagged mean temperature RQ, warning=F}
+meanTemp.df.RQ <- arima.xreg.12step.lagvars(ts.RQ, meanTemp.lags.RQ, 1,0,0,0,1,2)
+variables <- c("SARIMA", "meanTemp", "meanTemp 2 lags", "meanTemp 3 lags")
+for (i in 1:length(variables)) {
+  meanTemp.df.RQ[[2]][i, 'variable']<- variables[i]
+}
+meanTemp.df.RQ2 <- arima.xreg.12step.separateLags(ts.RQ, meanTemp.lags.RQ, 1,0,0,0,1,2)
+variables <- c("SARIMA", "meanTemp", "meanTemp.Lag1", "meanTemp.Lag2")
+for (i in 1:length(variables)) {
+  meanTemp.df.RQ2[[2]][i, 'variable']<- variables[i]
+}
+meanTemp.df.RQ3 <- rbind(meanTemp.df.RQ[[2]], meanTemp.df.RQ2[[2]])
+meanTemp.df.RQ3 <- meanTemp.df.RQ3[!duplicated(meanTemp.df.RQ3),]
+meanTemp.df.RQ3
+```
+
+#### Max temperature 
+
+Maximum temperature with 8 months of lag was the best model, we will use this variable for our next models.
+
+```{r lagged max temperature RQ, warning=F}
+maxTemp.df.RQ <- arima.xreg.12step.lagvars(ts.RQ, maxTemp.lags.RQ, 1,0,0,0,1,2)
+variables <- c("SARIMA", "maxTemp", "maxTemp 2 lags", "maxTemp 3 lags", "maxTemp 4 lags")
+for (i in 1:length(variables)) {
+  maxTemp.df.RQ[[2]][i, 'variable']<- variables[i]
+}
+maxTemp.df.RQ2 <- arima.xreg.12step.separateLags(ts.RQ, maxTemp.lags.RQ, 1,0,0,0,1,2)
+variables <- c("SARIMA", "maxTemp", "maxTemp.Lag6", "maxTemp.Lag7", "maxTemp.Lag8")
+for (i in 1:length(variables)) {
+  maxTemp.df.RQ2[[2]][i, 'variable']<- variables[i]
+}
+maxTemp.df.RQ3 <- rbind(maxTemp.df.RQ[[2]], maxTemp.df.RQ2[[2]])
+maxTemp.df.RQ3 <- maxTemp.df.RQ3[!duplicated(maxTemp.df.RQ3),]
+maxTemp.df.RQ3
+```
+
+#### Min temperature 
+
+Minimum temperature with 8 months of lag was the best model, we will use this variable for our next models.
+
+```{r lagged min temperature RQ, warning=F}
+minTemp.df.RQ <- arima.xreg.12step.lagvars(ts.RQ, minTemp.lags.RQ, 1,0,0,0,1,2)
+variables <- c("SARIMA", "minTemp", "minTemp 2 lags", "minTemp 3 lags", "minTemp 4 lags", "minTemp 5 lags")
+for (i in 1:length(variables)) {
+  minTemp.df.RQ[[2]][i, 'variable']<- variables[i]
+}
+minTemp.df.RQ2 <- arima.xreg.12step.separateLags(ts.RQ, minTemp.lags.RQ, 1,0,0,0,1,2)
+variables <- c("SARIMA", "minTemp", "minTemp.Lag5", "minTemp.Lag6", "minTemp.Lag7", "minTemp.Lag8")
+for (i in 1:length(variables)) {
+  minTemp.df.RQ2[[2]][i, 'variable']<- variables[i]
+}
+minTemp.df.RQ3 <- rbind(minTemp.df.RQ[[2]], minTemp.df.RQ2[[2]])
+minTemp.df.RQ3 <- minTemp.df.RQ3[!duplicated(minTemp.df.RQ3),]
+minTemp.df.RQ3
+```
+
+#### Precipitation 
+
+Precipitation with 5 months of lag was the best model, we will use this variable for our next models.
+
+```{r lagged precipitation RQ, warning=F}
+prec.df.RQ <- arima.xreg.12step.lagvars(ts.RQ, prec.lags.RQ, 1,0,0,0,1,2)
+variables <- c("SARIMA", "prec", "prec 2 lags", "prec 3 lags")
+for (i in 1:length(variables)) {
+  prec.df.RQ[[2]][i, 'variable']<- variables[i]
+}
+prec.df.RQ2 <- arima.xreg.12step.separateLags(ts.RQ, prec.lags.RQ, 1,0,0,0,1,2)
+variables <- c("SARIMA", "prec", "prec.Lag5", "prec.Lag6")
+for (i in 1:length(variables)) {
+  prec.df.RQ2[[2]][i, 'variable']<- variables[i]
+}
+prec.df.RQ3 <- rbind(prec.df.RQ[[2]], prec.df.RQ2[[2]])
+prec.df.RQ3 <- prec.df.RQ3[!duplicated(prec.df.RQ3),]
+prec.df.RQ3
+```
+
+#### NDVI 
+
+NDVI with 6 months of lag was the best model, we will use this variable for our next models.
+
+```{r lagged NDVI RQ, warning=F}
+ndvi.df.RQ <- arima.xreg.12step.lagvars(ts.RQ, ndvi.lags.RQ, 1,0,0,0,1,2)
+variables <- c("SARIMA", "ndvi", "ndvi 2 lags", "ndvi 3 lags", "ndvi 4 lags")
+for (i in 1:length(variables)) {
+  ndvi.df.RQ[[2]][i, 'variable']<- variables[i]
+}
+ndvi.df.RQ2 <- arima.xreg.12step.separateLags(ts.RQ, ndvi.lags.RQ, 1,0,0,0,1,2)
+variables <- c("SARIMA", "ndvi", "ndvi.Lag4", "ndvi.Lag5", "ndvi.Lag6")
+for (i in 1:length(variables)) {
+  ndvi.df.RQ2[[2]][i, 'variable']<- variables[i]
+}
+ndvi.df.RQ3 <- rbind(ndvi.df.RQ[[2]], ndvi.df.RQ2[[2]])
+ndvi.df.RQ3 <- ndvi.df.RQ3[!duplicated(ndvi.df.RQ3),]
+ndvi.df.RQ3
+```
+
+#### NDWI 
+
+NDWI with 5 months of lag was the best model, we will use this variable for our next models.
+
+```{r lagged NDWI RQ, warning=F}
+ndwi.df.RQ <- arima.xreg.12step.lagvars(ts.RQ, ndwi.lags.RQ, 1,0,0,0,1,2)
+variables <- c("SARIMA", "ndwi", "ndwi 2 lags", "ndwi 3 lags")
+for (i in 1:length(variables)) {
+  ndwi.df.RQ[[2]][i, 'variable']<- variables[i]
+}
+ndwi.df.RQ2 <- arima.xreg.12step.separateLags(ts.RQ, ndwi.lags.RQ, 1,0,0,0,1,2)
+variables <- c("SARIMA", "ndwi", "ndwi.Lag5", "ndwi.Lag6")
+for (i in 1:length(variables)) {
+  ndwi.df.RQ2[[2]][i, 'variable']<- variables[i]
+}
+ndwi.df.RQ3 <- rbind(ndwi.df.RQ[[2]], ndwi.df.RQ2[[2]])
+ndwi.df.RQ3 <- ndwi.df.RQ3[!duplicated(ndwi.df.RQ3),]
+ndwi.df.RQ3
+```
+
+#### EVI 
+
+EVI with 6 months of lag was the best model, we will use this variable for our next models.
+
+```{r lagged EVI RQ, warning=F}
+evi.df.RQ <- arima.xreg.12step.lagvars(ts.RQ, evi.lags.RQ, 1,0,0,0,1,2)
+variables <- c("SARIMA", "evi", "evi 2 lags", "evi 3 lags", "evi 4 lags")
+for (i in 1:length(variables)) {
+  evi.df.RQ[[2]][i, 'variable']<- variables[i]
+}
+evi.df.RQ2 <- arima.xreg.12step.separateLags(ts.RQ, evi.lags.RQ, 1,0,0,0,1,2)
+variables <- c("SARIMA", "evi", "evi.Lag4", "evi.Lag5", "evi.Lag6")
+for (i in 1:length(variables)) {
+  evi.df.RQ2[[2]][i, 'variable']<- variables[i]
+}
+evi.df.RQ3 <- rbind(evi.df.RQ[[2]], evi.df.RQ2[[2]])
+evi.df.RQ3 <- evi.df.RQ3[!duplicated(evi.df.RQ3),]
+evi.df.RQ3
+```
+
+#### Evaporation 
+
+Evaporation with 4 months of lag was the best model, we will use this variable for our next models.
+
+```{r lagged Evaporation RQ, warning=F}
+evp.df.RQ <- arima.xreg.12step.lagvars(ts.RQ, evp.lags.RQ, 1,0,0,0,1,2)
+variables <- c("SARIMA", "evp", "evp 2 lags", "evp 3 lags")
+for (i in 1:length(variables)) {
+  evp.df.RQ[[2]][i, 'variable']<- variables[i]
+}
+evp.df.RQ2 <- arima.xreg.12step.separateLags(ts.RQ, evp.lags.RQ, 1,0,0,0,1,2)
+variables <- c("SARIMA", "evp", "evp.Lag3", "evp.Lag4")
+for (i in 1:length(variables)) {
+  evp.df.RQ2[[2]][i, 'variable']<- variables[i]
+}
+evp.df.RQ3 <- rbind(evp.df.RQ[[2]], evp.df.RQ2[[2]])
+evp.df.RQ3 <- evp.df.RQ3[!duplicated(evp.df.RQ3),]
+evp.df.RQ3
+```
+
+#### Land surface temperature 
+
+Land surface temperature with 5 months of lag was the best model, we will use this variable for our next models.
+
+```{r lagged Land surface temperature RQ, warning=F}
+lst.df.RQ <- arima.xreg.12step.lagvars(ts.RQ, lst.lags.RQ, 1,0,0,0,1,2)
+variables <- c("SARIMA", "lst", "lst 2 lags", "lst 3 lags")
+for (i in 1:length(variables)) {
+  lst.df.RQ[[2]][i, 'variable']<- variables[i]
+}
+lst.df.RQ2 <- arima.xreg.12step.separateLags(ts.RQ, lst.lags.RQ, 1,0,0,0,1,2)
+variables <- c("SARIMA", "lst", "lst.Lag4", "lst.Lag5")
+for (i in 1:length(variables)) {
+  lst.df.RQ2[[2]][i, 'variable']<- variables[i]
+}
+lst.df.RQ3 <- rbind(lst.df.RQ[[2]], lst.df.RQ2[[2]])
+lst.df.RQ3 <- lst.df.RQ3[!duplicated(lst.df.RQ3),]
+lst.df.RQ3
+```
+
+#### Runoff 
+
+Runoff with 4 months of lag was the best model, we will use this variable for our next models.
+
+```{r lagged Runoff RQ, warning=F}
+runoff.df.RQ <- arima.xreg.12step.lagvars(ts.RQ, runoff.lags.RQ, 1,0,0,0,1,2)
+variables <- c("SARIMA", "runoff", "runoff 2 lags")
+for (i in 1:length(variables)) {
+  runoff.df.RQ[[2]][i, 'variable']<- variables[i]
+}
+runoff.df.RQ2 <- arima.xreg.12step.separateLags(ts.RQ, runoff.lags.RQ, 1,0,0,0,1,2)
+variables <- c("SARIMA", "runoff", "runoff.Lag4")
+for (i in 1:length(variables)) {
+  runoff.df.RQ2[[2]][i, 'variable']<- variables[i]
+}
+runoff.df.RQ3 <- rbind(runoff.df.RQ[[2]], runoff.df.RQ2[[2]])
+runoff.df.RQ3 <- runoff.df.RQ3[!duplicated(runoff.df.RQ3),]
+runoff.df.RQ3
+```
+
+
+### Model fitting with external regressors
+
+Now we will compare our final variables and pick the first to include in our final model.
+
+#### each parameter 
+
+```{r data management3 RQ, warning=F}
+parameters.RQ <- cbind(
+  ts = ts.RQ,
+  meanTemp.Lag2 = stats::lag(meanTemp.RQ, -2),
+  maxTemp.Lag8 = stats::lag(maxTemp.RQ, -8),
+  minTemp.Lag8 = stats::lag(minTemp.RQ, -8),
+  prec.Lag5 = stats::lag(prec.RQ, -5),
+  ndvi.Lag6 = stats::lag(ndvi.RQ, -6),
+  ndwi.Lag5 = stats::lag(ndwi.RQ, -5),
+  evi.Lag6 = stats::lag(evi.RQ, -6),
+  evp.Lag4 = stats::lag(evp.RQ, -4),
+  lst.Lag5 = stats::lag(lst.RQ, -5),
+  runoff.Lag4 = stats::lag(runoff.RQ, -4),
+  swvl1.Lag0 = swvl1.RQ
+)
+
+parameters.RQ <- ts(parameters.RQ[1:132, 1:12], start = 2003, frequency = 12)
+```
+
+Minimum temperature has the lowest MAE with 0.05310012, we will use this combination for our next iteration.
+
+```{r each parameter RQ, warning=F}
+variables <- c("meanTemp.", "maxTemp.", "minTemp.", "prec.", "ndvi.", "ndwi.", "evi.", "evp.", "lst.", "runoff.", "swvl1.")
+eachparameter.RQ <-arima.xreg.12step(parameters.RQ, variables, 1,0,0,0,1,2)
+variables <- c("SARIMA", "meanTemp.", "maxTemp.", "minTemp.", "prec.", "ndvi.", "ndwi.", "evi.", "evp.", "lst.", "runoff.", "swvl1.")
+for (i in 1:length(variables)) {
+  eachparameter.RQ[[2]][i, 'variable']<- variables[i]
+}
+eachparameter.RQ[[2]]
+
+(g <- ggplot()+ 
+  geom_line(aes(1:12, eachparameter.RQ[[1]][1,], colour = 'SARIMA')) + 
+  geom_line(aes(1:12, eachparameter.RQ[[1]][4,], colour = 'MinTemp')) +
+  labs(x = 'Horizonte', y = 'MAE', colour = 'Modelo')+
+  scale_x_continuous(breaks = 1:12)+
+  theme(legend.position = "bottom",
+        legend.box.background = element_rect(),
+        legend.text = element_text(size = 10)
+        ))
+#ggsave(filename = "plots/RQ_step0.png", plot = g)
+```
+
+#### Min temperature
+
+The addition of precipitation to our Minimum temperature model has the lowest MAE with 0.05250432, we will include this variable for our next iteration.
+
+```{r step 1 RQ, warning=F}
+variables <- c("meanTemp.", "maxTemp.", "minTemp.", "prec.", "ndvi.", "ndwi.", "evi.", "evp.", "lst.", "runoff.", "swvl1.")
+keep <- c("minTemp.")
+model.minTemp.RQ <- arima.xreg.12step.keep(parameters.RQ, variables, keep, 1,0,0,0,1,2)
+names <- c("SARIMA", "+meanTemp.", "+maxTemp", "+prec.", "+ndvi.", "+ndwi.", "+evi.","+evp.", "+lst.", "+runoff.", "+swvl1.")
+for (i in 1:length(names)) {
+  model.minTemp.RQ[[2]][i, 'variable']<- names[i]
+}
+model.minTemp.RQ[[2]]
+
+(g<-ggplot()+ 
+  geom_line(aes(1:12, model.minTemp.RQ[[1]][1,], colour = 'SARIMA')) + 
+  geom_line(aes(1:12, eachparameter.RQ[[1]][4,], colour = 'MinTemp')) +
+  geom_line(aes(1:12, model.minTemp.RQ[[1]][4,], colour = 'MinTemp+prec')) +
+  labs(x = 'Horizonte', y = 'MAE', colour = 'Modelo')+
+  scale_x_continuous(breaks = 1:12)+
+  theme(legend.position = "bottom",
+        legend.box.background = element_rect(),
+        legend.text = element_text(size = 10)
+        ))
+#ggsave(filename = "plots/RQ_step1.png", plot = g)
+```
+
+#### Min temperature + Precipitation
+
+No further improvement to our model was achieved, so our final model will include Minimum temperature and precipitation as external regressors for the dengue cases in the province of Requena.
+
+```{r step 2 RQ, warning=F}
+variables <- c("meanTemp.", "maxTemp.", "minTemp.", "prec.", "ndvi.", "ndwi.", "evi.", "evp.", "lst.", "runoff.", "swvl1.")
+keep <- c("minTemp.", "prec.")
+model.minTemp.prec.RQ <- arima.xreg.12step.keep(parameters.RQ, variables, keep, 1,0,0,0,1,2)
+names <- c("SARIMA", "+meanTemp.", "+maxTemp", "+ndvi.", "+ndwi.", "+evi.","+evp.", "+lst.", "+runoff.", "+swvl1.")
+for (i in 1:length(names)) {
+  model.minTemp.prec.RQ[[2]][i, 'variable']<- names[i]
+}
+model.minTemp.prec.RQ[[2]]
+
+(g<-ggplot()+ 
+  geom_line(aes(1:12, model.minTemp.prec.RQ[[1]][1,], colour = 'SARIMA')) + 
+  geom_line(aes(1:12, model.minTemp.RQ[[1]][4,], colour = 'MinTemp+prec')) +
+  labs(x = 'Horizon', y = 'MAE', colour = 'Model')+
+  scale_x_continuous(breaks = 1:12)+
+  theme(legend.position = "bottom",
+        legend.box.background = element_rect(),
+        legend.text = element_text(size = 10)
+        ))
+#ggsave(filename = "plots/RQ_step2.png", plot = g)
+```
+
+## Ucayali 
+
+### Environmental variables time series and lagged predictors {.tabset .tabset-fade}
+```{r time series variables UY, warning=F}
+ts.UY = ts(dt[dt$province == "Ucayali", c('den1k')], frequency = 12, start = 2003) # TS
+meanTemp.UY = ts(dt[dt$province == "Ucayali", c('meanTemperature')], frequency = 12, start = 2003) # TS
+maxTemp.UY = ts(dt[dt$province == "Ucayali", c('maxTemperature')], frequency = 12, start = 2003) # TS
+minTemp.UY = ts(dt[dt$province == "Ucayali", c('minTemperature')], frequency = 12, start = 2003) # TS
+prec.UY = ts(dt[dt$province == "Ucayali", c('precipitation')], frequency = 12, start = 2003) # TS
+ndvi.UY = ts(dt[dt$province == "Ucayali", c('NDVI')], frequency = 12, start = 2003) # TS
+ndwi.UY = ts(dt[dt$province == "Ucayali", c('NDWI')], frequency = 12, start = 2003) # TS
+evi.UY = ts(dt[dt$province == "Ucayali", c('EVI')], frequency = 12, start = 2003) # TS
+et.UY = ts(dt[dt$province == "Ucayali", c('ET')], frequency = 12, start = 2003) # TS
+evp.UY = ts(dt[dt$province == "Ucayali", c('evp')], frequency = 12, start = 2003) # TS
+lst.UY = ts(dt[dt$province == "Ucayali", c('LST')], frequency = 12, start = 2003) # TS
+runoff.UY = ts(dt[dt$province == "Ucayali", c('runoff')], frequency = 12, start = 2003) # TS
+swvl1.UY = ts(dt[dt$province == "Ucayali", c('swvl1')], frequency = 12, start = 2003) # TS
+```
+
+```{r cross correlation UY, warning=F, fig.align = "center"}
+env.var <- list(meanTemp.UY, maxTemp.UY, minTemp.UY, prec.UY, ndvi.UY, ndwi.UY, evi.UY, et.UY, evp.UY, lst.UY, 
+            runoff.UY, swvl1.UY)
+for (i in 1:length(env.var)) { # iterate between environmental factors
+  
+  # ccf and pacf plots
+  temp.ccf <- ccf(as.numeric(env.var[[i]]), as.numeric(ts.UY), type = "correlation", plot = FALSE) # ccf
+  temp.ccfdf <- with(temp.ccf, data.frame(lag, acf)) # get df from ccf to plot it with ggplot
+  conf.level <- 0.95 # confidence level
+  ciline <- qnorm((1 - conf.level)/2)/sqrt(length(ts.UY)) # confidence lines
+  #ccf
+  q <- ggplot(data = temp.ccfdf, mapping = aes(x = lag, y = acf)) +
+      geom_hline(aes(yintercept = 0)) +
+      geom_segment(mapping = aes(xend = lag, yend = 0))+
+      geom_hline(aes(yintercept = ciline), linetype = 3, color = 'darkblue') + 
+      geom_hline(aes(yintercept = -ciline), linetype = 3, color = 'darkblue')+
+      labs(title = colnames(env.var[[i]]))+
+      theme_bw() +
+      theme(panel.grid = element_blank(),
+            axis.text.x = element_text(angle = 0, vjust=0.5, size = 8),
+            axis.text.y = element_text(angle = 0, vjust=0.5, size = 8),
+            axis.title= element_text(size=8,face="bold"),
+            title = element_text(angle = 0, vjust=0.5, size = 8, face = 'bold'))
+ 
+  #
+  assign(paste0('ccf.', i), q)
+}
+#crosscorrelation.plots <- mget(ls(pattern = 'ccf.*'))
+crosscorrelation.plots <- mget(c('ccf.1', 'ccf.2', "ccf.3", "ccf.4", "ccf.5", "ccf.6", "ccf.7", "ccf.8", 
+                                 "ccf.9", "ccf.10", "ccf.11", "ccf.12"))
+
+(plot.ccf <- do.call(plot_grid, crosscorrelation.plots))
+#ggsave(filename = "plots/UY_ccf.png", plot = plot.ccf)
+```
+
+- Mean temperature: 0, and 9
+- Maximum temperature: 0, 8, and 9
+- Minimum temperature: 0, 7, 8, and 9
+- Precipitation: 0, 1, and 2
+- NDVI: 0, 5, 6, and 7
+- NDWI: 0, 1, and 2
+- EVI: 0, 5, and 6
+- Evaporation: 0, and 9
+- Land surface temperature: 0, and 6
+- Runoff: 0, 4, and 5
+- Surface water volumetric layer: 0, 5, and 6
+
+```{r data management2 UY, warning=F}
+# lagged predictors
+## mean temp
+meanTemp.lags.UY <- ts(cbind(
+  meanTemp.Lag0 = meanTemp.UY,
+  meanTemp.Lag9 = stats::lag(meanTemp.UY, -9)
+), start = 2003, frequency = 12)
+
+meanTemp.lags.UY <- ts(meanTemp.lags.UY[1:132, 1:2], start = 2003, frequency = 12)
+## max temp
+maxTemp.lags.UY <- ts(cbind(
+  maxTemp.Lag0 = maxTemp.UY,
+  maxTemp.Lag8 = stats::lag(maxTemp.UY, -8),
+  maxTemp.Lag9 = stats::lag(maxTemp.UY, -9)
+), start = 2003, frequency = 12)
+
+maxTemp.lags.UY <- ts(maxTemp.lags.UY[1:132, 1:3], start = 2003, frequency = 12)
+## min temp
+minTemp.lags.UY <- ts(cbind(
+  minTemp.Lag0 = minTemp.UY,
+  minTemp.Lag7 = stats::lag(minTemp.UY, -7),
+  minTemp.Lag8 = stats::lag(minTemp.UY, -8),
+  minTemp.Lag9 = stats::lag(minTemp.UY, -9)
+), start = 2003, frequency = 12)
+
+minTemp.lags.UY <- ts(minTemp.lags.UY[1:132, 1:4], start = 2003, frequency = 12)
+## precipitation
+prec.lags.UY <- ts(cbind(
+  prec.Lag0 = prec.UY,
+  prec.Lag1 = stats::lag(prec.UY, -1),
+  prec.Lag2 = stats::lag(prec.UY, -2)
+), start = 2003, frequency = 12)
+
+prec.lags.UY <- ts(prec.lags.UY[1:132, 1:3], start = 2003, frequency = 12)
+## ndvi
+ndvi.lags.UY <- ts(cbind(
+  ndvi.Lag0 = ndvi.UY,
+  ndvi.Lag5 = stats::lag(ndvi.UY, -5),
+  ndvi.Lag6 = stats::lag(ndvi.UY, -6),
+  ndvi.Lag7 = stats::lag(ndvi.UY, -7)
+), start = 2003, frequency = 12)
+
+ndvi.lags.UY <- ts(ndvi.lags.UY[1:132, 1:4], start = 2003, frequency = 12)
+## ndwi
+ndwi.lags.UY <- ts(cbind(
+  ndwi.Lag0 = ndwi.UY,
+  ndwi.Lag1 = stats::lag(ndwi.UY, -1),
+  ndwi.Lag2 = stats::lag(ndwi.UY, -2)
+), start = 2003, frequency = 12)
+
+ndwi.lags.UY <- ts(ndwi.lags.UY[1:132, 1:3], start = 2003, frequency = 12)
+## evi
+evi.lags.UY <- ts(cbind(
+  evi.Lag0 = evi.UY,
+  evi.Lag5 = stats::lag(evi.UY, -5),
+  evi.Lag6 = stats::lag(evi.UY, -6)
+), start = 2003, frequency = 12)
+
+evi.lags.UY <- ts(evi.lags.UY[1:132, 1:3], start = 2003, frequency = 12)
+## evaporation
+evp.lags.UY <- ts(cbind(
+  evp.Lag0 = evp.UY,
+  evp.Lag9 = stats::lag(evp.UY, -9)
+), start = 2003, frequency = 12)
+
+evp.lags.UY <- ts(evp.lags.UY[1:132, 1:2], start = 2003, frequency = 12)
+## lst
+lst.lags.UY <- ts(cbind(
+  lst.Lag0 = lst.UY,
+  lst.Lag6 = stats::lag(lst.UY, -6)
+), start = 2003, frequency = 12)
+
+lst.lags.UY <- ts(lst.lags.UY[1:132, 1:2], start = 2003, frequency = 12)
+## runoff
+runoff.lags.UY <- ts(cbind(
+  runoff.Lag0 = runoff.UY,
+  runoff.Lag4 = stats::lag(runoff.UY, -4),
+  runoff.Lag5 = stats::lag(runoff.UY, -5)
+), start = 2003, frequency = 12)
+
+runoff.lags.UY <- ts(runoff.lags.UY[1:132, 1:3], start = 2003, frequency = 12)
+## swvl1
+swvl1.lags.UY <- ts(cbind(
+  swvl1.Lag0 = swvl1.UY,
+  swvl1.Lag5 = stats::lag(swvl1.UY, -5),
+  swvl1.Lag6 = stats::lag(swvl1.UY, -6)
+), start = 2003, frequency = 12)
+
+swvl1.lags.UY <- ts(swvl1.lags.UY[1:132, 1:3], start = 2003, frequency = 12)
+
+```
+
+#### Mean temperature 
+
+Mean temperature with 0 months of lag was the best model, we will use this variable for our next models.
+
+```{r lagged mean temperature UY, warning=F}
+meanTemp.df.UY <- arima.xreg.12step.lagvars(ts.UY, meanTemp.lags.UY, 0,0,1,0,1,1)
+variables <- c("ARIMA", "meanTemp", "meanTemp 2 lags")
+for (i in 1:length(variables)) {
+  meanTemp.df.UY[[2]][i, 'variable']<- variables[i]
+}
+meanTemp.df.UY2 <- arima.xreg.12step.separateLags(ts.UY, meanTemp.lags.UY, 0,0,1,0,1,1)
+variables <- c("ARIMA", "meanTemp", "meanTemp.Lag9")
+for (i in 1:length(variables)) {
+  meanTemp.df.UY2[[2]][i, 'variable']<- variables[i]
+}
+meanTemp.df.UY3 <- rbind(meanTemp.df.UY[[2]], meanTemp.df.UY2[[2]])
+meanTemp.df.UY3 <- meanTemp.df.UY3[!duplicated(meanTemp.df.UY3),]
+meanTemp.df.UY3
+```
+
+#### Max temperature 
+
+Maximum temperature with 8 months of lag was the best model, we will use this variable for our next models.
+
+```{r lagged max temperature UY, warning=F}
+maxTemp.df.UY <- arima.xreg.12step.lagvars(ts.UY, maxTemp.lags.UY, 0,0,1,0,1,1)
+variables <- c("ARIMA", "maxTemp", "maxTemp 2 lags", "maxTemp 3 lags")
+for (i in 1:length(variables)) {
+  maxTemp.df.UY[[2]][i, 'variable']<- variables[i]
+}
+maxTemp.df.UY2 <- arima.xreg.12step.separateLags(ts.UY, maxTemp.lags.UY, 0,0,1,0,1,1)
+variables <- c("ARIMA", "maxTemp", "maxTemp.Lag8", "maxTemp.Lag9")
+for (i in 1:length(variables)) {
+  maxTemp.df.UY2[[2]][i, 'variable']<- variables[i]
+}
+maxTemp.df.UY3 <- rbind(maxTemp.df.UY[[2]], maxTemp.df.UY2[[2]])
+maxTemp.df.UY3 <- maxTemp.df.UY3[!duplicated(maxTemp.df.UY3),]
+maxTemp.df.UY3
+```
+
+#### Min temperature 
+
+Minimum temperature with 7 months of lag was the best model, we will use this variable for our next models.
+
+```{r lagged min temperature UY, warning=F}
+minTemp.df.UY <- arima.xreg.12step.lagvars(ts.UY, minTemp.lags.UY, 0,0,1,0,1,1)
+variables <- c("ARIMA", "minTemp", "minTemp 2 lags", "minTemp 3 lags", "minTemp 4 lags")
+for (i in 1:length(variables)) {
+  minTemp.df.UY[[2]][i, 'variable']<- variables[i]
+}
+minTemp.df.UY2 <- arima.xreg.12step.separateLags(ts.UY, minTemp.lags.UY, 0,0,1,0,1,1)
+variables <- c("ARIMA", "minTemp", "minTemp.Lag7", "minTemp.Lag8", "minTemp.Lag9")
+for (i in 1:length(variables)) {
+  minTemp.df.UY2[[2]][i, 'variable']<- variables[i]
+}
+minTemp.df.UY3 <- rbind(minTemp.df.UY[[2]], minTemp.df.UY2[[2]])
+minTemp.df.UY3 <- minTemp.df.UY3[!duplicated(minTemp.df.UY3),]
+minTemp.df.UY3
+```
+
+#### Precipitation 
+
+Precipitation with 3 consecutive lags was the best model, meaning that we will use precipitation with 0, 1 and 2 months of lag together in our next models.
+
+```{r lagged precipitation UY, warning=F}
+prec.df.UY <- arima.xreg.12step.lagvars(ts.UY, prec.lags.UY, 0,0,1,0,1,1)
+variables <- c("ARIMA", "prec", "prec 2 lags", "prec 3 lags")
+for (i in 1:length(variables)) {
+  prec.df.UY[[2]][i, 'variable']<- variables[i]
+}
+prec.df.UY2 <- arima.xreg.12step.separateLags(ts.UY, prec.lags.UY, 0,0,1,0,1,1)
+variables <- c("ARIMA", "prec", "prec.Lag1", "prec.Lag2")
+for (i in 1:length(variables)) {
+  prec.df.UY2[[2]][i, 'variable']<- variables[i]
+}
+prec.df.UY3 <- rbind(prec.df.UY[[2]], prec.df.UY2[[2]])
+prec.df.UY3 <- prec.df.UY3[!duplicated(prec.df.UY3),]
+prec.df.UY3
+```
+
+#### NDVI 
+
+NDVI with 0 months of lag was the best model, we will use this variable for our next models.
+
+```{r lagged NDVI UY, warning=F}
+ndvi.df.UY <- arima.xreg.12step.lagvars(ts.UY, ndvi.lags.UY, 0,0,1,0,1,1)
+variables <- c("ARIMA", "ndvi", "ndvi 2 lags", "ndvi 3 lags", "ndvi 4 lags")
+for (i in 1:length(variables)) {
+  ndvi.df.UY[[2]][i, 'variable']<- variables[i]
+}
+ndvi.df.UY2 <- arima.xreg.12step.separateLags(ts.UY, ndvi.lags.UY, 0,0,1,0,1,1)
+variables <- c("ARIMA", "ndvi", "ndvi.Lag5", "ndvi.Lag6", "ndvi.Lag7")
+for (i in 1:length(variables)) {
+  ndvi.df.UY2[[2]][i, 'variable']<- variables[i]
+}
+ndvi.df.UY3 <- rbind(ndvi.df.UY[[2]], ndvi.df.UY2[[2]])
+ndvi.df.UY3 <- ndvi.df.UY3[!duplicated(ndvi.df.UY3),]
+ndvi.df.UY3
+```
+
+#### NDWI 
+
+NDWI with 3 consecutive lags was the best model, meaning that we will use NDWI with 0, 1, and 2 month of lag together in our next models.
+
+```{r lagged NDWI UY, warning=F}
+ndwi.df.UY <- arima.xreg.12step.lagvars(ts.UY, ndwi.lags.UY, 0,0,1,0,1,1)
+variables <- c("ARIMA", "ndwi", "ndwi 2 lags", "ndwi 3 lags")
+for (i in 1:length(variables)) {
+  ndwi.df.UY[[2]][i, 'variable']<- variables[i]
+}
+ndwi.df.UY2 <- arima.xreg.12step.separateLags(ts.UY, ndwi.lags.UY, 0,0,1,0,1,1)
+variables <- c("ARIMA", "ndwi", "ndwi.Lag1", "ndwi.Lag2")
+for (i in 1:length(variables)) {
+  ndwi.df.UY2[[2]][i, 'variable']<- variables[i]
+}
+ndwi.df.UY3 <- rbind(ndwi.df.UY[[2]], ndwi.df.UY2[[2]])
+ndwi.df.UY3 <- ndwi.df.UY3[!duplicated(ndwi.df.UY3),]
+ndwi.df.UY3
+```
+
+#### EVI 
+
+EVI with 0 months of lag was the best model, we will use this variable for our next models.
+
+```{r lagged EVI UY, warning=F}
+evi.df.UY <- arima.xreg.12step.lagvars(ts.UY, evi.lags.UY, 0,0,1,0,1,1)
+variables <- c("ARIMA", "evi", "evi 2 lags", "evi 3 lags")
+for (i in 1:length(variables)) {
+  evi.df.UY[[2]][i, 'variable']<- variables[i]
+}
+evi.df.UY2 <- arima.xreg.12step.separateLags(ts.UY, evi.lags.UY, 0,0,1,0,1,1)
+variables <- c("ARIMA", "evi", "evi.Lag5", "evi.Lag6")
+for (i in 1:length(variables)) {
+  evi.df.UY2[[2]][i, 'variable']<- variables[i]
+}
+evi.df.UY3 <- rbind(evi.df.UY[[2]], evi.df.UY2[[2]])
+evi.df.UY3 <- evi.df.UY3[!duplicated(evi.df.UY3),]
+evi.df.UY3
+```
+
+#### Evaporation 
+
+Evaporation with 0 months of lag was the best model, we will use this variable for our next models.
+
+```{r lagged Evaporation UY, warning=F}
+evp.df.UY <- arima.xreg.12step.lagvars(ts.UY, evp.lags.UY, 0,0,1,0,1,1)
+variables <- c("ARIMA", "evp", "evp 2 lags")
+for (i in 1:length(variables)) {
+  evp.df.UY[[2]][i, 'variable']<- variables[i]
+}
+evp.df.UY2 <- arima.xreg.12step.separateLags(ts.UY, evp.lags.UY, 0,0,1,0,1,1)
+variables <- c("ARIMA", "evp", "evp.Lag9")
+for (i in 1:length(variables)) {
+  evp.df.UY2[[2]][i, 'variable']<- variables[i]
+}
+evp.df.UY3 <- rbind(evp.df.UY[[2]], evp.df.UY2[[2]])
+evp.df.UY3 <- evp.df.UY3[!duplicated(evp.df.UY3),]
+evp.df.UY3
+```
+
+#### Land surface temperature 
+
+Land surface temperature with 0 months of lag was the best model, we will use this variable for our next models.
+
+```{r lagged Land surface temperature UY, warning=F}
+lst.df.UY <- arima.xreg.12step.lagvars(ts.UY, lst.lags.UY, 0,0,1,0,1,1)
+variables <- c("ARIMA", "lst", "lst 2 lags")
+for (i in 1:length(variables)) {
+  lst.df.UY[[2]][i, 'variable']<- variables[i]
+}
+lst.df.UY2 <- arima.xreg.12step.separateLags(ts.UY, lst.lags.UY, 0,0,1,0,1,1)
+variables <- c("ARIMA", "lst", "lst.Lag6")
+for (i in 1:length(variables)) {
+  lst.df.UY2[[2]][i, 'variable']<- variables[i]
+}
+lst.df.UY3 <- rbind(lst.df.UY[[2]], lst.df.UY2[[2]])
+lst.df.UY3 <- lst.df.UY3[!duplicated(lst.df.UY3),]
+lst.df.UY3
+```
+
+#### Runoff 
+
+Runoff with 5 months of lag was the best model, we will use this variable for our next models.
+
+```{r lagged Runoff UY, warning=F}
+runoff.df.UY <- arima.xreg.12step.lagvars(ts.UY, runoff.lags.UY, 0,0,1,0,1,1)
+variables <- c("ARIMA", "runoff", "runoff 2 lags", "runoff 3 lags")
+for (i in 1:length(variables)) {
+  runoff.df.UY[[2]][i, 'variable']<- variables[i]
+}
+runoff.df.UY2 <- arima.xreg.12step.separateLags(ts.UY, runoff.lags.UY, 0,0,1,0,1,1)
+variables <- c("ARIMA", "runoff", "runoff.Lag4", "runoff.Lag5")
+for (i in 1:length(variables)) {
+  runoff.df.UY2[[2]][i, 'variable']<- variables[i]
+}
+runoff.df.UY3 <- rbind(runoff.df.UY[[2]], runoff.df.UY2[[2]])
+runoff.df.UY3 <- runoff.df.UY3[!duplicated(runoff.df.UY3),]
+runoff.df.UY3
+```
+
+#### SWVL1 
+
+Surface water volumetric layer with 6 months of lag was the best model, we will use this variable for our next models.
+
+```{r lagged SWVL1 UY, warning=F}
+swvl1.df.UY <- arima.xreg.12step.lagvars(ts.UY, swvl1.lags.UY, 0,0,1,0,1,1)
+variables <- c("ARIMA", "swvl1", "swvl1 2 lags", "swvl1 3 lags")
+for (i in 1:length(variables)) {
+  swvl1.df.UY[[2]][i, 'variable']<- variables[i]
+}
+swvl1.df.UY2 <- arima.xreg.12step.separateLags(ts.UY, swvl1.lags.UY, 0,0,1,0,1,1)
+variables <- c("ARIMA", "swvl1", "swvl1.Lag5", "swvl1.Lag6")
+for (i in 1:length(variables)) {
+  swvl1.df.UY2[[2]][i, 'variable']<- variables[i]
+}
+swvl1.df.UY3 <- rbind(swvl1.df.UY[[2]], swvl1.df.UY2[[2]])
+swvl1.df.UY3 <- swvl1.df.UY3[!duplicated(swvl1.df.UY3),]
+swvl1.df.UY3
+```
+
+
+### Model fitting with external regressors
+
+Now we will compare our final variables and pick the first to include in our final model.
+
+#### each parameter 
+
+```{r data management3 UY, warning=F}
+parameters.UY <- cbind(
+  ts = ts.UY,
+  meanTemp.Lag0 = meanTemp.UY, 
+  maxTemp.Lag8 = stats::lag(maxTemp.UY, -8),
+  minTemp.Lag7 = stats::lag(minTemp.UY, -7),
+  prec.Lag0 = prec.UY,
+  prec.Lag1 = stats::lag(prec.UY, -1),
+  prec.Lag2 = stats::lag(prec.UY, -2),
+  ndvi.Lag0 = ndvi.UY, 
+  ndwi.Lag0 = ndwi.UY, 
+  ndwi.Lag1 = stats::lag(ndwi.UY, -1),
+  ndwi.Lag2 = stats::lag(ndwi.UY, -2),
+  evi.Lag0 = evi.UY, 
+  evp.Lag0 = evp.UY, 
+  lst.Lag0 = lst.UY,
+  runoff.Lag5 = stats::lag(runoff.UY, -5),
+  swvl1.Lag6 = stats::lag(swvl1.UY, -6)
+)
+
+parameters.UY <- ts(parameters.UY[1:132, 1:16], start = 2003, frequency = 12)
+```
+
+Now we will compare our final variables and pick the first to include in our final model.
+
+```{r each parameter UY, warning=F}
+variables <- c("meanTemp.", "maxTemp.", "minTemp.", "prec.", "ndvi.", "ndwi.", "evi.", "evp.", "lst.", "runoff.", "swvl1.")
+eachparameter.UY <-arima.xreg.12step(parameters.UY, variables, 0, 0, 1, 0, 1, 1)
+variables <- c("SARIMA", "meanTemp.", "maxTemp.", "minTemp.", "prec.", "ndvi.", "ndwi.", "evi.", "evp.", "lst.", "runoff.", "swvl1.")
+for (i in 1:length(variables)) {
+  eachparameter.UY[[2]][i, 'variable']<- variables[i]
+}
+eachparameter.UY[[2]]
+
+(g <- ggplot()+ 
+  geom_line(aes(1:12, eachparameter.UY[[1]][1,], colour = 'SARIMA')) + 
+  geom_line(aes(1:12, eachparameter.UY[[1]][7,], colour = 'NDWI')) +
+  labs(x = 'Horizonte', y = 'MAE', colour = 'Modelo')+
+  scale_x_continuous(breaks = 1:12)+
+  theme(legend.position = "bottom",
+        legend.box.background = element_rect(),
+        legend.text = element_text(size = 10)
+        ))
+#ggsave(filename = "plots/UY_step0.png", plot = g)
+```
+
+#### NDWI
+
+The addition of EVI to our NDWI model has the lowest MAE with 0.1109364, we will include this variable for our next iteration.
+
+```{r step 1 UY, warning=F}
+variables <- c("meanTemp.", "maxTemp.", "minTemp.", "prec.", "ndvi.", "ndwi.", "evi.", "evp.", "lst.", "runoff.", "swvl1.")
+keep <- c("ndwi.")
+model.ndwi.UY <- arima.xreg.12step.keep(parameters.UY, variables, keep, 0, 0, 1, 0, 1, 1)
+names <- c("ARIMA", "+meanTemp.", "+maxTemp.", "+minTemp", "+prec.", "+ndvi.", "+evi.", "+evp.", "+lst.", "+runoff.", "+swvl1.")
+for (i in 1:length(names)) {
+  model.ndwi.UY[[2]][i, 'variable']<- names[i]
+}
+model.ndwi.UY[[2]]
+
+(g <-ggplot()+ 
+  geom_line(aes(1:12, model.ndwi.UY[[1]][1,], colour = 'ARIMA')) + 
+  geom_line(aes(1:12, eachparameter.UY[[1]][7,], colour = 'NDWI')) +
+  geom_line(aes(1:12, model.ndwi.UY[[1]][7,], colour = 'NDWI+EVI')) +
+  labs(x = 'Horizon', y = 'MAE', colour = 'Model')+
+  scale_x_continuous(breaks = 1:12)+
+  theme(legend.position = "bottom",
+        legend.box.background = element_rect(),
+        legend.text = element_text(size = 10)
+        ))
+
+#ggsave(filename = "plots/UY_step1.png", plot = g)
+```
+
+#### NDWI + EVI
+
+The addition of Land surface temperature to our NDWI + EVI model has the lowest MAE with 0.1105998, we will include this variable for our next iteration.
+
+```{r step 2 UY, warning=F}
+variables <- c("meanTemp.", "maxTemp.", "minTemp.", "prec.", "ndvi.", "ndwi.", "evi.", "evp.", "lst.", "runoff.", "swvl1.")
+keep <- c("ndwi.", "evi.")
+model.ndwi.evi.UY <- arima.xreg.12step.keep(parameters.UY, variables, keep, 0, 0, 1, 0, 1, 1)
+names <- c("SARIMA", "+meanTemp.", "+maxTemp.", "+minTemp", "+prec.", "+ndvi.", "+evp.", "+lst.", "+runoff.", "+swvl1.")
+for (i in 1:length(names)) {
+  model.ndwi.evi.UY[[2]][i, 'variable']<- names[i]
+}
+model.ndwi.evi.UY[[2]]
+
+(g <- ggplot()+ 
+  geom_line(aes(1:12, model.ndwi.evi.UY[[1]][1,], colour = 'SARIMA')) + 
+  geom_line(aes(1:12, model.ndwi.UY[[1]][7,], colour = 'NDWI+EVI')) +
+  geom_line(aes(1:12, model.ndwi.evi.UY[[1]][8,], colour = 'NDWI+EVI+LST')) +
+  labs(x = 'Horizonte', y = 'MAE', colour = 'Modelo')+
+  scale_x_continuous(breaks = 1:12)+
+  theme(legend.position = "bottom",
+        legend.box.background = element_rect(),
+        legend.text = element_text(size = 10)
+        ))
+#ggsave(filename = "plots/UY_step2.png", plot = g)
+```
+
+#### NDWI + EVI + LST
+
+The addition of Runoff to our NDWI + EVI + LST model has the lowest MAE with 0.1104364, we will include this variable for our next iteration.
+
+```{r step 3 UY, warning=F}
+variables <- c("meanTemp.", "maxTemp.", "minTemp.", "prec.", "ndvi.", "ndwi.", "evi.", "evp.", "lst.", "runoff.", "swvl1.")
+keep <- c("ndwi.", "evi.", "lst.")
+model.ndwi.evi.lst.UY <- arima.xreg.12step.keep(parameters.UY, variables, keep, 0, 0, 1, 0, 1, 1)
+names <- c("SARIMA", "+meanTemp.", "+maxTemp.", "+minTemp", "+prec.", "+ndvi.", "+evp.", "+runoff.", "+swvl1.")
+for (i in 1:length(names)) {
+  model.ndwi.evi.lst.UY[[2]][i, 'variable']<- names[i]
+}
+model.ndwi.evi.lst.UY[[2]]
+
+(g <- ggplot()+ 
+  geom_line(aes(1:12, model.ndwi.evi.lst.UY[[1]][1,], colour = 'SARIMA')) + 
+  geom_line(aes(1:12, model.ndwi.evi.UY[[1]][8,], colour = 'NDWI+EVI+LST')) +
+  geom_line(aes(1:12, model.ndwi.evi.lst.UY[[1]][8,], colour = 'NDWI+EVI+LST+Runoff')) +
+  labs(x = 'Horizonte', y = 'MAE', colour = 'Modelo')+
+  scale_x_continuous(breaks = 1:12)+
+  theme(legend.position = "bottom",
+        legend.box.background = element_rect(),
+        legend.text = element_text(size = 10)
+        ))
+#ggsave(filename = "plots/UY_step3.png", plot = g)
+```
+
+#### NDWI + EVI + LST + Runoff
+
+The addition of Maximum temperature to our NDWI + EVI + LST + Runoff model has the lowest MAE with 0.1100031, we will include this variable for our next iteration.
+
+```{r step 4 UY, warning=F}
+variables <- c("meanTemp.", "maxTemp.", "minTemp.", "prec.", "ndvi.", "ndwi.", "evi.", "evp.", "lst.", "runoff.", "swvl1.")
+keep <- c("ndwi.", "evi.", "lst.", "runoff.")
+model.ndwi.evi.lst.runoff.UY <- arima.xreg.12step.keep(parameters.UY, variables, keep, 0, 0, 1, 0, 1, 1)
+names <- c("SARIMA", "+meanTemp.", "+maxTemp.", "+minTemp", "+prec.", "+ndvi.", "+evp.", "+swvl1.")
+for (i in 1:length(names)) {
+  model.ndwi.evi.lst.runoff.UY[[2]][i, 'variable']<- names[i]
+}
+model.ndwi.evi.lst.runoff.UY[[2]]
+
+(g <-ggplot()+ 
+  geom_line(aes(1:12, model.ndwi.evi.lst.runoff.UY[[1]][1,], colour = 'SARIMA')) + 
+  geom_line(aes(1:12, model.ndwi.evi.lst.UY[[1]][8,], colour = 'NDWI+EVI+LST+Runoff')) +
+  geom_line(aes(1:12, model.ndwi.evi.lst.runoff.UY[[1]][3,], colour = 'NDWI+EVI+LST+Runoff+MaxTemp')) +
+  labs(x = 'Horizonte', y = 'MAE', colour = 'Modelo')+
+  scale_x_continuous(breaks = 1:12)+
+  theme(legend.position = "bottom",
+        legend.box.background = element_rect(),
+        legend.text = element_text(size = 10)
+        ))
+#ggsave(filename = "plots/UY_step4.png", plot = g)
+```
+
+#### NDWI + EVI + LST + Runoff + Max Temperature
+
+No further improvement to our model was achieved, so our final model will include NDWI, EVI, LST, Runoff and Maximum temperature as external regressors for the dengue cases in the province of Ucayali.
+
+```{r step 5 UY, warning=F}
+variables <- c("meanTemp.", "maxTemp.", "minTemp.", "prec.", "ndvi.", "ndwi.", "evi.", "evp.", "lst.", "runoff.", "swvl1.")
+keep <- c("ndwi.", "evi.", "lst.", "runoff.", "maxTemp.")
+model.ndwi.evi.lst.runoff.maxTemp.UY <- arima.xreg.12step.keep(parameters.UY, variables, keep, 0, 0, 1, 0, 1, 1)
+names <- c("SARIMA", "+meanTemp.", "+minTemp", "+prec.", "+ndvi.", "+evp.", "+swvl1.")
+for (i in 1:length(names)) {
+  model.ndwi.evi.lst.runoff.maxTemp.UY[[2]][i, 'variable']<- names[i]
+}
+model.ndwi.evi.lst.runoff.maxTemp.UY[[2]]
+
+(g<-ggplot()+ 
+  geom_line(aes(1:12, model.ndwi.evi.lst.runoff.maxTemp.UY[[1]][1,], colour = 'SARIMA')) + 
+  geom_line(aes(1:12, model.ndwi.evi.lst.runoff.UY[[1]][3,], colour = 'NDWI+EVI+LST+Runoff+MaxTemp')) +
+  labs(x = 'Horizon', y = 'MAE', colour = 'Model')+
+  scale_x_continuous(breaks = 1:12)+
+  theme(legend.position = "bottom",
+        legend.box.background = element_rect(),
+        legend.text = element_text(size = 10)
+        ))
+#ggsave(filename = "plots/UY_step5.png", plot = g)
+```
+
+# Final models {.tabset .tabset-pills}
+## Alto Amazonas
+```{r Final model AM, warning=F}
+(AM.final.model <- arima(ts.AM, order = c(0,0,1), seasonal = list(order=c(0,1,1), period = 12), xreg = parameters.AM[,c(9,10,4,5)]))
+
+data <- as.data.frame(fitted(AM.final.model))
+data <-cbind(data, dt[dt$province == 'Alto amazonas', c('den1k', 'ts.date')])
+
+(g <- ggplot(data = data) + geom_line(aes(ts.date, den1k, colour = 'Observado'))+
+  geom_line(aes(y = x, x = ts.date, colour = 'Pronosticado'), linetype="dashed")+
+  theme_minimal()+
+  labs(y = 'Incidencia del Dengue\n(casos por 1000 habitantes)', x = '')+
+    theme(legend.position = 'bottom')+
+  scale_colour_manual(name="",
+    values=c(Observado="red", Pronosticado="gray3"))
+)
+#ggsave(plot = g, filename = 'plots/AM_final.png')
+
+b <- lm(data$den1k ~ data$x - 1)
+summary(b)
+```
+## Datem del Marañon
+```{r Final model DM, warning=F}
+(DM.final.model <- arima(ts.DM, order = c(0,0,2), seasonal = list(order=c(0,1,1), period = 12), xreg = parameters.DM[,c(6,7,8,9, 11, 2)]))
+
+data <- as.data.frame(fitted(DM.final.model))
+data <-cbind(data, dt[dt$province == 'Datem del marañon', c('den1k', 'ts.date')])
+
+(g <- ggplot(data = data) + geom_line(aes(ts.date, den1k, colour = 'Observado'))+
+  geom_line(aes(y = x, x = ts.date, colour = 'Pronosticado'), linetype="dashed")+
+  theme_minimal()+
+  labs(y = 'Incidencia del Dengue\n(casos por 1000 habitantes)', x = '')+
+    theme(legend.position = 'bottom')+
+  scale_colour_manual(name="",
+    values=c(Observado="red", Pronosticado="gray3"))
+)
+#ggsave(plot = g, filename = 'plots/DM_final.png')
+
+b <- lm(data$den1k ~ data$x - 1)
+summary(b)
+```
+## Loreto
+```{r Final model LO, warning=F}
+(LO.final.model <- arima(ts.LO, order = c(0,0,1), seasonal = list(order=c(0,1,1), period = 12), xreg = parameters.LO[,c(10,2)]))
+
+data <- as.data.frame(fitted(LO.final.model))
+data <-cbind(data, dt[dt$province == 'Loreto', c('den1k', 'ts.date')])
+
+(g <- ggplot(data = data) + geom_line(aes(ts.date, den1k, colour = 'Observado'))+
+  geom_line(aes(y = x, x = ts.date, colour = 'Pronosticado'), linetype="dashed")+
+  theme_minimal()+
+  labs(y = 'Incidencia del Dengue\n(casos por 1000 habitantes)', x = '')+
+    theme(legend.position = 'bottom')+
+  scale_colour_manual(name="",
+    values=c(Observado="red", Pronosticado="gray3"))
+)
+#ggsave(plot = g, filename = 'plots/LO_final.png')
+
+b <- lm(data$den1k ~ data$x - 1)
+summary(b)
+```
+## Mariscal Ramon Castilla
+```{r Final model RC, warning=F}
+(RC.final.model <- arima(ts.RC, order = c(0,0,2), seasonal = list(order=c(0,1,1), period = 12), xreg = parameters.RC[,c(11,12)]))
+
+data <- as.data.frame(fitted(RC.final.model))
+data <-cbind(data, dt[dt$province == 'Mariscal ramon castilla', c('den1k', 'ts.date')])
+
+(g <- ggplot(data = data) + geom_line(aes(ts.date, den1k, colour = 'Observado'))+
+  geom_line(aes(y = x, x = ts.date, colour = 'Pronosticado'), linetype="dashed")+
+  theme_minimal()+
+  labs(y = 'Incidencia del Dengue\n(casos por 1000 habitantes)', x = '')+
+    theme(legend.position = 'bottom')+
+  scale_colour_manual(name="",
+    values=c(Observado="red", Pronosticado="gray3"))
+)
+#ggsave(plot = g, filename = 'plots/RC_final.png')
+
+b <- lm(data$den1k ~ data$x - 1)
+summary(b)
+```
+## Maynas
+```{r Final model MY, warning=F}
+(MY.final.model <- arima(ts.MY, order = c(0,0,1), seasonal = list(order=c(0,1,1), period = 12), xreg = parameters.MY[,c(8,10, 7, 11, 9)]))
+
+data <- as.data.frame(fitted(MY.final.model))
+data <-cbind(data, dt[dt$province == 'Maynas', c('den1k', 'ts.date')])
+
+(g <- ggplot(data = data) + geom_line(aes(ts.date, den1k, colour = 'Observado'))+
+  geom_line(aes(y = x, x = ts.date, colour = 'Pronosticado'), linetype="dashed")+
+  theme_minimal()+
+  labs(y = 'Incidencia del Dengue\n(casos por 1000 habitantes)', x = '')+
+    theme(legend.position = 'bottom')+
+  scale_colour_manual(name="",
+    values=c(Observado="red", Pronosticado="gray3"))
+)
+#ggsave(plot = g, filename = 'plots/MY_final.png')
+
+b <- lm(data$den1k ~ data$x - 1)
+summary(b)
+```
+## Requena
+```{r Final model RQ, warning=F}
+(RQ.final.model <- arima(ts.RQ, order = c(1,0,0), seasonal = list(order=c(0,1,2), period = 12), xreg = parameters.RQ[,c(4, 5)]))
+
+data <- as.data.frame(fitted(RQ.final.model))
+data <-cbind(data, dt[dt$province == 'Requena', c('den1k', 'ts.date')])
+
+(g <- ggplot(data = data) + geom_line(aes(ts.date, den1k, colour = 'Observado'))+
+  geom_line(aes(y = x, x = ts.date, colour = 'Pronosticado'), linetype="dashed")+
+  theme_minimal()+
+  labs(y = 'Incidencia del Dengue\n(casos por 1000 habitantes)', x = '')+
+    theme(legend.position = 'bottom')+
+  scale_colour_manual(name="",
+    values=c(Observado="red", Pronosticado="gray3"))
+)
+#ggsave(plot = g, filename = 'plots/RQ_final.png')
+
+b <- lm(data$den1k ~ data$x - 1)
+summary(b)
+```
+## Ucayali
+```{r Final model UY, warning=F}
+(UY.final.model <- arima(ts.UY, order = c(0,0,1), seasonal = list(order=c(0,1,1), period = 12), xreg = parameters.UY[,c(9, 10, 11, 12, 14, 15, 3)]))
+
+data <- as.data.frame(fitted(UY.final.model))
+data <-cbind(data, dt[dt$province == 'Ucayali', c('den1k', 'ts.date')])
+
+(g <- ggplot(data = data) + geom_line(aes(ts.date, den1k, colour = 'Observado'))+
+  geom_line(aes(y = x, x = ts.date, colour = 'Pronosticado'), linetype="dashed")+
+  theme_minimal()+
+  labs(y = 'Incidencia del Dengue\n(casos por 1000 habitantes)', x = '')+
+    theme(legend.position = 'bottom')+
+  scale_colour_manual(name="",
+    values=c(Observado="red", Pronosticado="gray3"))
+)
+#ggsave(plot = g, filename = 'plots/UY_final.png')
+
+b <- lm(data$den1k ~ data$x - 1)
+summary(b)
+```
+
+# Environmental variation
+
+```{r map cases, warning=F}
+for (i in 2003:2013) {
+dt.year2 <- dt.year[dt.year$yy == i,]
+merge.area <- merge(area2, dt.year2, by.x = "NOMBPROV", by.y = "province", all.x = T)
+
+a <- ggplot(merge.area, aes(x = long, y = lat)) +
+    geom_polygon(aes(group = group, fill = den1k),
+                 color = "black", size = 0.25)+
+  geom_text(data = centroids, aes(x = x, y = y, label = dt.year2$initial))+
+  theme_nothing(legend = T)+
+  scale_fill_distiller(name = "Incidencia", palette = "Reds", direction = 1, breaks = c(round(min(merge.area$den1k)+sd(merge.area$den1k)/10, digits = 3), round(max(merge.area$den1k)-sd(merge.area$den1k)/10, digits = 3)))+
+  theme(legend.position = "bottom", legend.justification = "center", legend.title = element_blank(), legend.text = element_text(vjust = 12))+
+  labs(title = "Incidencia")
+
+b <- ggplot(merge.area, aes(x = long, y = lat)) +
+    geom_polygon(aes(group = group, fill = LST),
+                 color = "black", size = 0.25)+
+  geom_text(data = centroids, aes(x = x, y = y, label = dt.year2$initial))+
+  theme_nothing(legend = T)+
+  scale_fill_distiller(name = "LST", palette = "YlOrRd", direction = 1, breaks = c(round(min(merge.area$LST)+sd(merge.area$LST)/10, digits = 3), round(max(merge.area$LST)-sd(merge.area$LST)/10, digits = 3)))+
+  theme(legend.position = "bottom", legend.justification = "center", legend.title = element_blank(), legend.text = element_text(vjust = 12))+
+  labs(title = "LST")
+
+c <- ggplot(merge.area, aes(x = long, y = lat)) +
+    geom_polygon(aes(group = group, fill = EVI),
+                 color = "black", size = 0.25)+
+  geom_text(data = centroids, aes(x = x, y = y, label = dt.year2$initial))+
+  theme_nothing(legend = T)+
+  scale_fill_distiller(name = "EVI", palette = "Greens", direction = 1, breaks = c(round(min(merge.area$EVI)+sd(merge.area$EVI)/10, digits = 3), round(max(merge.area$EVI)-sd(merge.area$EVI)/10, digits = 3)))+
+  theme(legend.position = "bottom", legend.justification = "center", legend.title = element_blank(), legend.text = element_text(vjust = 12))+
+  labs(title = "EVI")
+
+d <- ggplot(merge.area, aes(x = long, y = lat)) +
+    geom_polygon(aes(group = group, fill = Escorrentia),
+                 color = "black", size = 0.25)+
+  geom_text(data = centroids, aes(x = x, y = y, label = dt.year2$initial))+
+  theme_nothing(legend = T)+
+  scale_fill_distiller(name = "Escorrentía", palette = "Blues", direction = 1, breaks = c(round(min(merge.area$Escorrentia)+sd(merge.area$Escorrentia)/10, digits = 3), round(max(merge.area$Escorrentia)-sd(merge.area$Escorrentia)/10, digits = 3)))+
+  theme(legend.position = "bottom", legend.justification = "center", legend.title = element_blank(), legend.text = element_text(vjust = 12))+
+  labs(title = "Escorrentía")
+
+e <- ggplot(merge.area, aes(x = long, y = lat)) +
+    geom_polygon(aes(group = group, fill = NDWI),
+                 color = "black", size = 0.25)+
+  geom_text(data = centroids, aes(x = x, y = y, label = dt.year2$initial))+
+  theme_nothing(legend = T)+
+  scale_fill_distiller(name = "NDWI", palette = "GnBu", direction = 1, breaks = c(round(min(merge.area$NDWI)+sd(merge.area$NDWI)/10, digits = 4), round(max(merge.area$NDWI)-sd(merge.area$NDWI)/10, digits = 4)))+
+  theme(legend.position = "bottom", legend.justification = "center", legend.title = element_blank(), legend.text = element_text(vjust = 12))+
+  labs(title = "NDWI")
+
+assign(x = paste0("sptemp_", i), value = plot_grid(a, b, c, d, e, nrow = 1))
+#title <- ggdraw() + draw_label(i, fontface='bold', size = 30)
+#ggsave(filename = paste0("plots/gif/sptemp", i, ".png"), plot = plot_grid(title, plot_grid(a, b, c, d, e, nrow = 1), ncol = 1, rel_heights=c(0.1, 1)), width = 15)
+}
+sptemp <- plot_grid(sptemp_2003, sptemp_2004, sptemp_2005, ncol = 1)
+#ggsave(filename = "plots/sptemp_2003-2005.png", plot = sptemp, width = 12, height = 10)
+```
+
+
+```{r variation yearly, warning=F}
+(g <- ggplot(dt2, aes(x = grupo, y= valor, colour = parametro))+ 
+  facet_grid(parametro~yy, scales = "free")+
+  geom_boxplot()+ theme_minimal() + xlab("") + ylab("Valor")+
+  stat_compare_means(aes(group = grupo), label = "p.format", size = 3, label.y.npc  = 1, label.x.npc = 0.5)+
+  geom_jitter(shape=16, position=position_jitter(0.2))+
+  theme_test()+ 
+  theme(axis.text.x = element_text(angle = 0, hjust = 0.5, size = 12),
+        axis.text.y = element_text(hjust = 0.5, size = 12),
+        axis.title = element_text(size = 12, face = "bold"),
+        title = element_text(size = 20, face = "bold"),
+        legend.position = "none",
+        legend.box.background = element_rect(),
+        legend.text = element_text(size = 8),
+        strip.background = element_rect(colour = "black", fill = "white"),
+        strip.text.x = element_text(size = 15, face = "bold"),
+        strip.text.y = element_text(size = 15, face = "bold"))
+)
+#ggsave(filename = 'plots/differences_final.png', plot = g, width = 15)
+```
+
+```{r variation monthly, warning=F}
+meses <- c("Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic")
+names(meses) <- c("01", "02", "03", "04", "05", "06", "07", "08", "09", "10", "11", "12")
+
+(g <- ggplot(dt3, aes(x = grupo, y= valor, colour = parametro))+ 
+  facet_grid(parametro~mm, scales = "free", labeller = labeller(mm = meses))+
+  geom_boxplot()+ theme_minimal() + xlab("") + ylab("Valor")+
+  stat_compare_means(aes(group = grupo), label = "p.format", size = 3, label.y.npc  = 1, label.x.npc = 0.5)+
+  geom_jitter(shape=16, position=position_jitter(0.2))+
+  theme_test()+ 
+  theme(axis.text.x = element_text(angle = 0, hjust = 0.5, size = 12),
+        axis.text.y = element_text(hjust = 0.5, size = 12),
+        axis.title = element_text(size = 12, face = "bold"),
+        title = element_text(size = 20, face = "bold"),
+        legend.position = "none",
+        legend.box.background = element_rect(),
+        legend.text = element_text(size = 8),
+        strip.background = element_rect(colour = "black", fill = "white"),
+        strip.text.x = element_text(size = 15, face = "bold"),
+        strip.text.y = element_text(size = 15, face = "bold"))
+)
+ggsave(filename = 'plots/differences_montly.png', plot = g, width = 15)
+```
